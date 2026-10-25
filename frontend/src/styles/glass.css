@@ -399,7 +399,9 @@ button.chip.on, .chip.inverse { background: var(--ink-chip); color: var(--ink-ch
 }
 .splash-word { position: relative; display: flex; font: 400 clamp(76px, 11vh, 120px)/1 var(--font-display); color: #fff; letter-spacing: 0.02em; }
 .splash-word > span { display: inline-block; animation: splash-letter 640ms var(--ease-spring) both; animation-delay: calc(560ms + var(--i) * 90ms); text-shadow: 0 8px 30px rgba(19, 36, 41, 0.3); }
-.splash-word > .seven { color: #E46556; text-shadow: 0 0 26px rgba(228, 101, 86, 0.55); }
+.splash-word > .seven { color: #F6CEC8; text-shadow: 0 0 26px rgba(241, 185, 178, 0.6); }
+/* nom de l'appli sous la pilule (se7en Censored) */
+.splash-app { margin-top: -10px; font: 400 clamp(30px, 4.4vh, 46px)/1 var(--font-display); letter-spacing: 0.12em; color: #F6CEC8; text-shadow: 0 6px 24px rgba(19, 36, 41, 0.35); animation: splash-letter 640ms var(--ease-spring) 1100ms both; }
 @keyframes splash-letter { from { opacity: 0; transform: translateY(38%); filter: blur(10px); } to { opacity: 1; transform: none; filter: none; } }
 .splash-sheen {
   position: absolute; top: -20%; bottom: -20%; width: 40%; left: -60%; pointer-events: none; transform: skewX(-18deg);

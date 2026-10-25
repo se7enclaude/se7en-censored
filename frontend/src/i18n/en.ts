@@ -313,6 +313,8 @@ export const en: Record<string, string> = {
   "settings.presets.desc": "Reusable download settings, optionally applied per platform.",
   "settings.ai": "AI & GPU",
   "settings.ai.desc": "Models, GPU, VRAM, tiles and video encoding.",
+  "settings.censor": "Censoring",
+  "settings.censor.desc": "Analysis and export.",
   "settings.components": "Components",
   "settings.components.desc": "External engines se7en uses. Missing ones can be installed in one click.",
   "settings.privacy": "Privacy",
@@ -437,8 +439,8 @@ export const en: Record<string, string> = {
   // about
   "about.installed": "Installed edition",
   "about.legalTitle": "Use responsibly",
-  "about.legal": "Only download content you own, that is freely licensed, or that you are otherwise authorized to download, and respect each platform's terms. se7en does not bypass DRM or access restrictions.",
-  "about.credits": "Built on yt-dlp, gallery-dl, FFmpeg, Real-ESRGAN (ncnn-Vulkan), FastAPI, pywebview and React.",
+  "about.legal": "No detection is perfect: check the timeline before streaming. Blurring intimate areas does not make a video comply with every rule (sexual scenes, copyright): you remain responsible for what you stream.",
+  "about.credits": "Built on NudeNet (notAI-tech, AGPL-3.0), ONNX Runtime (DirectML), FFmpeg, yt-dlp, FastAPI, pywebview and React.",
 
   // logs
   "logs.title": "Log",
@@ -556,7 +558,7 @@ export const en: Record<string, string> = {
   "errors.unknown": "An unexpected error occurred.",
   "errors.unknown.hint": "Open the Log for technical details. You can retry the task.",
   "splash.resolution": "Resolution",
-  "splash.tagline": "Clips · Captions · Vertical",
+  "splash.tagline": "Automatic blurring · 100% on your PC",
   "splash.skip": "Click to skip",
   "splash.init": "Starting the engine…",
 

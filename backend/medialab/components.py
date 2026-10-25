@@ -196,9 +196,10 @@ def status() -> list[dict]:
         items.append({**_spec_dict(cid), "installed": bool(b), "path": b, "version": version if b else None})
     from . import ai_assets
     st = ai_assets.status()
+    mine = [i for i in st["items"] if i["purpose"] in ai_assets.REQUIRED]  # le détecteur de se7en Censored seulement
     items.append({**_spec_dict("aipack"), "installed": st["installed"], "path": None,
-                  "version": f"{sum(1 for i in st['items'] if i['installed'])}/{len(st['items'])} models",
-                  "size": st["missing_bytes"] or st["total_bytes"], "models": st["items"]})
+                  "version": f"{sum(1 for i in mine if i['installed'])}/{len(mine)}",
+                  "size": sum(i["size"] for i in mine), "models": mine})
     ar = find_binary("aria2c")
     items.append({**_spec_dict("aria2"), "installed": bool(ar), "path": ar,
                   "version": _version_of(ar, ["--version"], r"aria2 version (\S+)") if ar else None})

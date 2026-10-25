@@ -294,6 +294,8 @@ export const fr: Record<string, string> = {
   "settings.presets.desc": "Réglages de téléchargement réutilisables, appliqués automatiquement par plateforme si souhaité.",
   "settings.ai": "IA & GPU",
   "settings.ai.desc": "Modèles, GPU, VRAM, tuiles et encodage vidéo.",
+  "settings.censor": "Floutage",
+  "settings.censor.desc": "Analyse et export.",
   "settings.components": "Composants",
   "settings.components.desc": "Moteurs externes utilisés par se7en. Ceux qui manquent s'installent en un clic.",
   "settings.privacy": "Confidentialité",
@@ -415,8 +417,8 @@ export const fr: Record<string, string> = {
 
   "about.installed": "Édition installée",
   "about.legalTitle": "Utilisation responsable",
-  "about.legal": "Ne téléchargez que des contenus qui vous appartiennent, sous licence libre, ou que vous êtes autorisé à télécharger, et respectez les conditions de chaque plateforme. se7en ne contourne ni DRM ni restrictions d'accès.",
-  "about.credits": "Basé sur yt-dlp, gallery-dl, FFmpeg, Real-ESRGAN (ncnn-Vulkan), FastAPI, pywebview et React.",
+  "about.legal": "Aucune détection n'est parfaite : vérifiez la frise avant de diffuser. Flouter les zones intimes ne rend pas une vidéo conforme à toutes les règles (scènes sexuelles, droits d'auteur) : vous restez responsable de ce que vous diffusez.",
+  "about.credits": "Basé sur NudeNet (notAI-tech, AGPL-3.0), ONNX Runtime (DirectML), FFmpeg, yt-dlp, FastAPI, pywebview et React.",
 
   "logs.title": "Journal",
   "logs.subtitle": "{w} avertissement(s) · {e} erreur(s) pendant cette session",
@@ -590,7 +592,7 @@ export const fr: Record<string, string> = {
   "errors.unknown": "Une erreur inattendue s'est produite.",
   "errors.unknown.hint": "Ouvrez le Journal pour les détails techniques. Vous pouvez relancer la tâche.",
   "splash.resolution": "Résolution",
-  "splash.tagline": "Clips · Sous-titres · Vertical",
+  "splash.tagline": "Floutage automatique · 100 % sur ton PC",
   "splash.skip": "Cliquer pour passer",
   "splash.init": "Initialisation du moteur…",
 

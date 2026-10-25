@@ -59,6 +59,7 @@ export function Splash({ onDone, version, ready }: { onDone: () => void; version
             ))}
           </span>
         </div>
+        <div className="splash-app">CENSORED</div>
         <div className="splash-tag">{t("splash.tagline")}</div>
       </div>
       <div className="splash-foot">

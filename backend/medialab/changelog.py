@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.0.1": {
+        "fr": ["L'écran de chargement et les réglages sont ceux de se7en Censored (ils montraient encore ceux de "
+               "se7en Clip et se7en Download)."],
+        "en": ["The loading screen and the settings now belong to se7en Censored (they still showed se7en Clip's "
+               "and se7en Download's)."],
+    },
     "1.0.0": {
         "fr": ["Première version : les parties intimes visibles sont repérées image par image et floutées, "
                "avec une vérification avant l'export."],
