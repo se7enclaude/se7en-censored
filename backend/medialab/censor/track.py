@@ -131,14 +131,16 @@ def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
     pad = int(round(p.pad_s * fps))
     wanted = {CLASS_IDS[c] for c in p.classes if c in CLASS_IDS}
     f, c, s, b = (np.asarray(det.get(k, [])) for k in ("f", "c", "s", "b"))
+    tr = np.asarray(det["t"]) if "t" in det and len(det["t"]) == len(f) else np.zeros(len(f), np.int8)
     if not len(f):
         return []
-    keep = np.isin(c, list(wanted)) & (s >= low)
-    f, c, s, b = f[keep], c[keep], s[keep].astype(np.float32), b[keep].astype(np.float32).reshape(-1, 4)
-    order = np.lexsort((-s, f))
-    f, c, s, b = f[order], c[order], s[order], b[order]
+    # tr = 1 : position suivie à l'image (detect.Watch), pas vue par le détecteur : ne sert qu'à prolonger une zone
+    keep = np.isin(c, list(wanted)) & ((s >= low) | (tr == 1))
+    f, c, s, b, tr = f[keep], c[keep], s[keep].astype(np.float32), b[keep].astype(np.float32).reshape(-1, 4), tr[keep]
+    order = np.lexsort((-s, tr, f))  # par image, les vraies détections d'abord, les plus confiantes en premier
+    f, c, s, b, tr = f[order], c[order], s[order], b[order], tr[order]
 
-    raw: list[dict] = []  # pistes en construction : {cls, obs: [(f, box, score)]}
+    raw: list[dict] = []  # pistes en construction : {cls, obs: [(f, box, score, suivie)]}
     open_by_cls: dict[int, list[dict]] = {}
     i = 0
     n = len(f)
@@ -161,22 +163,23 @@ def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
                     if v >= best_v:
                         best, best_v = ti, v
                 if best is None:
-                    if s[k] < thr:
-                        continue  # trop incertain pour ouvrir une nouvelle zone
-                    t = {"cls": int(cls), "obs": [(frame, b[k], float(s[k]))]}
+                    if tr[k] or s[k] < thr:
+                        continue  # trop incertain (ou seulement suivi) pour ouvrir une nouvelle zone
+                    t = {"cls": int(cls), "obs": [(frame, b[k], float(s[k]), False)]}
                     raw.append(t)
                     live.append(t)
                     used.add(len(live) - 1)
                 else:
-                    live[best]["obs"].append((frame, b[k], float(s[k])))
+                    live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k])))
                     used.add(best)
         i = j
 
     tracks: list[Track] = []
     for t in raw:
         obs = t["obs"]
-        top = max(o[2] for o in obs)
-        if len(obs) < 2 and top < thr + 0.15:
+        real = [o for o in obs if not o[3]]
+        top = max(o[2] for o in real)
+        if len(real) < 2 and top < thr + 0.15:
             continue  # vue une seule fois et sans certitude : sans doute une fausse alerte
         fs = np.array([o[0] for o in obs])
         bs = np.stack([o[1] for o in obs])
@@ -187,7 +190,7 @@ def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
         a2, z2 = max(0, a - pad), min(max(frames - 1, z), z + pad)
         boxes = np.concatenate([np.repeat(boxes[:1], a - a2, 0), boxes, np.repeat(boxes[-1:], z2 - z, 0)])
         boxes = _expand(boxes, p.margin)
-        tracks.append(Track(f"{LABELS[t['cls']]}-{a}-{len(tracks)}", LABELS[t["cls"]], a2, z2, boxes, top, len(obs)))
+        tracks.append(Track(f"{LABELS[t['cls']]}-{a}-{len(tracks)}", LABELS[t["cls"]], a2, z2, boxes, top, len(real)))
     tracks.sort(key=lambda t: (t.f0, t.f1))
     return tracks
 

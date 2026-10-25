@@ -1,8 +1,12 @@
-## se7en Censored 1.0.1
+## se7en Censored 1.1.0
 
-- L'écran de chargement montre bien **se7en Censored** (il affichait encore celui de se7en Clip).
-- Les réglages ne gardent que ce qui sert à se7en Censored : général, floutage (analyse et export sur la carte
-  graphique), composants, mises à jour, avancé, à propos.
+- **Suivi visuel des zones** : quand l'IA perd une zone une seconde (mouvement, flou de bougé, plan sombre), elle est
+  suivie à l'image au lieu de disparaître : plus de « trous » dans le flou. Relancez l'analyse d'un projet déjà fait
+  pour en profiter.
+- **Zones à la main qui suivent toutes seules** : tracez un cadre une fois, il suit le mouvement (jusqu'à 10 s, ou
+  jusqu'à ce que la zone sorte du cadre). « Recadrer » relance le suivi depuis l'image affichée, « Finir ici » l'arrête.
+- **Raccourcis clavier** dans la vérification : Espace (lecture), ← → (image), Maj + ← → (1 s), N / P (zone suivante /
+  précédente), A (ajouter une zone), R / F (recadrer / finir ici), Suppr (pas une zone), B (aperçu flouté), Échap.
 
 Tes projets et tes réglages sont gardés.
 

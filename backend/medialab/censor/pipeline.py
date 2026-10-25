@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 from ..errors import MediaLabError
 from ..logging_setup import get_logger
 from ..media import ffmpeg
@@ -95,7 +97,7 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
     project = P.load(pid)
     stats = summary(project)
     project = P.patch(pid, {"status": "review", "step": None, "detect": {k: meta.get(k) for k in
-                                                                         ("fps", "frames", "step", "mirror", "seconds", "gpu")},
+                                                                         ("v", "fps", "frames", "step", "mirror", "seconds", "gpu")},
                             "stats": stats})
     progress(1.0, "Analyse terminée", 0)
     return project
@@ -148,3 +150,54 @@ def export(pid: str, settings, cancel: threading.Event, progress: Progress) -> d
     progress(1.0, "Vidéo exportée", 0)
     log.info("Export of %s done in %.0fs", project.get("name"), time.time() - res["rendered_at"] + res["seconds"])
     return project
+
+
+# ------------------------------------------------------------------ zones à la main qui suivent toutes seules
+FOLLOW_MANUAL_MIN = 0.45  # en dessous, la zone est perdue (sortie du cadre, changement de plan)
+
+
+def follow_zone(project: dict, f: int, box: list[float], seconds: float = 10.0) -> dict:
+    """Suit à l'image une zone tracée à la main, de l'image ``f`` jusqu'à ce qu'on la perde (au plus ``seconds``).
+    Renvoie les images clés ({f, box}), où le suivi s'est arrêté et pourquoi."""
+    from . import follow as FW
+    from . import frames as FR
+    src = source_path(project)
+    video = project["video"]
+    loaded = detect.load(P.cache_dir(project["id"]))
+    meta = loaded[1] if loaded else {}
+    fps = float(meta.get("fps") or video.get("fps") or 25.0)
+    frames = int(meta.get("frames") or round(float(video.get("duration") or 0) * fps))
+    size = FR.analysis_size(int(video["width"]), int(video["height"]), detect.SIDE)
+    f = max(0, min(frames - 1, int(f)))
+    box = [float(np.clip(v, 0, 1)) for v in box]
+    keys = [{"f": f, "box": box}]
+    last = min(frames - 1, f + int(round(seconds * fps)))
+    reader = FR.Reader(src, fps, size, "rgb24", start=f)
+    reason = "end"
+    try:
+        first = reader.read()
+        if first is None:
+            return {"keys": keys, "until": f, "reason": "end"}
+        fw = FW.Follower(FW.gray(first), box, scales=(0.94, 1.0, 1.06))
+        if not fw.ok:
+            return {"keys": keys + [{"f": min(last, f + int(round(2 * fps))), "box": box}], "until": f, "reason": "flat"}
+        i = f
+        while i < last:
+            fr = reader.read()
+            if fr is None:
+                break
+            i += 1
+            r = fw.track(FW.gray(fr))
+            if r is None or r[1] < FOLLOW_MANUAL_MIN:
+                reason = "lost"
+                i -= 1
+                break
+            if (i - f) % 2 == 0 or i == last:
+                keys.append({"f": i, "box": [round(float(v), 4) for v in r[0]]})
+        if keys[-1]["f"] != i and i > f:
+            keys.append({"f": i, "box": [round(float(v), 4) for v in fw.box]})
+        if i >= last and reason != "lost":
+            reason = "limit"
+    finally:
+        reader.close()
+    return {"keys": keys, "until": keys[-1]["f"], "reason": reason, "seconds": round((keys[-1]["f"] - f) / fps, 2)}

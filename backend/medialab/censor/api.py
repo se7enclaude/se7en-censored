@@ -42,6 +42,12 @@ class ManualBody(BaseModel):
     manual: list[dict]
 
 
+class FollowBody(BaseModel):
+    f: int
+    box: list[float]
+    seconds: float = 10.0
+
+
 class HideBody(BaseModel):
     track: str
 
@@ -192,6 +198,14 @@ def register(app: FastAPI, S) -> None:
             project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
             return P.save(project)
         return await run_in_threadpool(run)
+
+    @app.post("/api/censor/projects/{pid}/follow")
+    async def follow(pid: str, body: FollowBody):
+        """Suit à l'image une zone tracée à la main : renvoie ses images clés (le client les enregistre)."""
+        if len(body.box) != 4:
+            raise MediaLabError("invalid", "Zone invalide.")
+        seconds = max(0.5, min(60.0, body.seconds))
+        return await run_in_threadpool(pipeline.follow_zone, P.load(pid), body.f, body.box, seconds)
 
     @app.post("/api/censor/projects/{pid}/hide")
     async def hide(pid: str, body: HideBody):

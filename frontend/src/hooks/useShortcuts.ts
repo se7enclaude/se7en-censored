@@ -2,20 +2,22 @@ import { useEffect } from "react";
 import { Page, useApp } from "../store/app";
 
 export const SHORTCUTS: { keys: string; key: string }[] = [
-  { keys: "Ctrl + 1…9, 0", key: "shortcuts.nav" },
+  { keys: "Ctrl + 1, 2, 3", key: "shortcuts.nav" },
   { keys: "Ctrl + ,", key: "shortcuts.settings" },
   { keys: "Ctrl + L", key: "shortcuts.logs" },
-  { keys: "Ctrl + V", key: "shortcuts.paste" },
-  { keys: "Enter", key: "shortcuts.analyze" },
-  { keys: "Ctrl + Enter", key: "shortcuts.download" },
-  { keys: "Ctrl + O", key: "shortcuts.import" },
-  { keys: "Ctrl + P", key: "shortcuts.preview" },
+  { keys: "Espace", key: "shortcuts.censor.play" },
+  { keys: "← →  (Maj : 1 s)", key: "shortcuts.censor.frame" },
+  { keys: "N / P", key: "shortcuts.censor.zone" },
+  { keys: "A", key: "shortcuts.censor.add" },
+  { keys: "R / F", key: "shortcuts.censor.edit" },
+  { keys: "Suppr", key: "shortcuts.censor.hide" },
+  { keys: "B", key: "shortcuts.censor.preview" },
   { keys: "?", key: "shortcuts.help" },
   { keys: "Esc", key: "shortcuts.close" },
 ];
 
-// Same order as the numbered tabs (01 Télécharger … 10 Doublons; Ctrl+0 is the tenth)
-const PAGES: Page[] = ["download", "queue", "upscale", "convert", "trim", "studio", "subtitles", "player", "history", "duplicates", "stats"];
+// Same order as the tabs of se7en Censored
+const PAGES: Page[] = ["censor", "queue", "history"];
 
 /** Global navigation shortcuts. Page-level shortcuts live in the pages. */
 export function useGlobalShortcuts(openHelp: () => void) {
@@ -28,8 +30,10 @@ export function useGlobalShortcuts(openHelp: () => void) {
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
         const n = Number(e.key);
         if (e.key >= "0" && e.key <= "9") {
+          const target = PAGES[n === 0 ? 9 : n - 1];
+          if (!target) return;
           e.preventDefault();
-          setPage(PAGES[n === 0 ? 9 : n - 1]);
+          setPage(target);
         } else if (e.key === ",") {
           e.preventDefault();
           setPage("settings");

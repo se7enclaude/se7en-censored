@@ -172,3 +172,77 @@ def test_export_blurs_frames_and_keeps_audio(tmp_path, ffmpeg_bin):
     assert b[cy - 10:cy + 10, cx - 10:cx + 10].mean() < 30                         # zone noire à l'image 15
     assert np.abs(b[200:230, 250:300].astype(int) - ref[200:230, 250:300]).mean() < 8  # le reste ressemble à la source
     assert a[cy - 10:cy + 10, cx - 10:cx + 10].mean() > 30                         # image 5 : pas de zone
+
+
+# ------------------------------------------------------------------ suivi visuel
+def _scene(rng, x, y, tex, h=360, w=640):
+    g = np.full((h, w, 3), 110, np.uint8)
+    g[y:y + tex.shape[0], x:x + tex.shape[1]] = tex
+    return g
+
+
+def test_ncc_finds_the_patch():
+    from medialab.censor import follow as FW
+    rng = np.random.default_rng(3)
+    region = rng.uniform(0, 255, (80, 120)).astype(np.float32)
+    tmpl = region[30:50, 70:95].copy()
+    res = FW.ncc(region, tmpl)
+    y, x = divmod(int(res.argmax()), res.shape[1])
+    assert (x, y) == (70, 30) and res.max() > 0.99
+    assert FW.ncc(region, np.full((10, 10), 7, np.float32)) is None  # zone unie : pas de suivi
+
+
+def test_follower_tracks_a_moving_zone():
+    from medialab.censor import follow as FW
+    rng = np.random.default_rng(4)
+    tex = rng.integers(0, 255, (60, 50, 3), np.uint8)
+    fw = FW.Follower(FW.gray(_scene(rng, 100, 100, tex)), [100 / 640, 100 / 360, 150 / 640, 160 / 360])
+    for i in range(1, 40):
+        box, score = fw.track(FW.gray(_scene(rng, 100 + 5 * i, 100 + 2 * i, tex)))
+    assert abs(box[0] * 640 - (100 + 5 * 39)) <= 2 and abs(box[1] * 360 - (100 + 2 * 39)) <= 2 and score > 0.8
+
+
+def test_watch_follows_a_zone_the_detector_lost():
+    from medialab.censor import detect
+    rng = np.random.default_rng(5)
+    tex = rng.integers(0, 255, (60, 50, 3), np.uint8)
+    w = detect.Watch(keep_frames=10, step=1)
+    box = [100 / 640, 100 / 360, 150 / 640, 160 / 360]
+    assert w.step(0, _scene(rng, 100, 100, tex), [(BREAST, 0.7, box)]) == []
+    got = [w.step(i, _scene(rng, 100 + 4 * i, 100, tex), []) for i in range(1, 15)]
+    assert all(len(g) == 1 for g in got[:10])           # suivie à l'image pendant 10 images
+    assert all(len(g) == 0 for g in got[10:])           # puis abandonnée (au-delà de keep_frames)
+    assert abs(got[5][0][2][0] * 640 - (100 + 4 * 6)) <= 2
+
+
+def test_tracked_rows_extend_but_never_open_a_zone():
+    real = moving(0, 10, dx=0)
+    tracked = [(f, BREAST, 0.9, [0.2, 0.3, 0.3, 0.42]) for f in range(11, 40)]
+    d = det(real + tracked)
+    d["t"] = np.array([0] * len(real) + [1] * len(tracked), np.int8)
+    tr = T.build(d, 25.0, 100, T.Params(pad_s=0, smooth=1))
+    assert len(tr) == 1 and tr[0].f1 == 39 and tr[0].hits == 11   # prolongée jusqu'à 39, 11 vraies détections
+    only = det(tracked)
+    only["t"] = np.ones(len(tracked), np.int8)
+    assert T.build(only, 25.0, 100, T.Params()) == []               # le suivi seul n'ouvre jamais de zone
+
+
+@pytest.mark.ffmpeg
+def test_manual_zone_follows_on_a_real_video(tmp_path, ffmpeg_bin):
+    """Un motif texturé traverse l'image : la zone tracée sur l'image 0 le suit toute seule."""
+    import subprocess
+    from medialab.censor import pipeline
+    src = tmp_path / "move.mp4"
+    subprocess.run([ffmpeg_bin, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360:r=25:d=3",
+                    "-f", "lavfi", "-i", "testsrc2=s=80x80:r=25:d=3",
+                    "-filter_complex", "[0][1]overlay=x='60+t*120':y=140:shortest=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    p = P.create(str(src))
+    p = P.patch(p["id"], {"video": P.video_info(src)})
+    box = [60 / 640, 140 / 360, 140 / 640, 220 / 360]
+    res = pipeline.follow_zone(p, 0, box, seconds=2.0)
+    assert res["reason"] == "limit" and res["seconds"] == pytest.approx(2.0, abs=0.1)
+    end = res["keys"][-1]
+    x_expected = (60 + 2.0 * 120) / 640
+    assert abs(end["box"][0] - x_expected) < 0.02 and end["f"] == 50
+    P.delete(p["id"])

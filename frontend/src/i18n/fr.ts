@@ -437,7 +437,7 @@ export const fr: Record<string, string> = {
   "logs.cat.gpu": "GPU",
 
   "shortcuts.title": "Raccourcis",
-  "shortcuts.nav": "Aller aux onglets 1 à 9",
+  "shortcuts.nav": "Floutage, file d'attente, historique",
   "shortcuts.logs": "Ouvrir les logs",
   "shortcuts.paste": "Coller un lien (analysé automatiquement)",
   "shortcuts.analyze": "Analyser le lien",
@@ -445,6 +445,13 @@ export const fr: Record<string, string> = {
   "shortcuts.import": "Importer des fichiers (Upscale)",
   "shortcuts.preview": "Aperçu de l'upscale",
   "shortcuts.sidebar": "Réduire la barre latérale",
+  "shortcuts.censor.play": "Lecture / pause",
+  "shortcuts.censor.frame": "Image précédente / suivante",
+  "shortcuts.censor.zone": "Zone suivante / précédente",
+  "shortcuts.censor.add": "Ajouter une zone (elle suit toute seule)",
+  "shortcuts.censor.edit": "Recadrer / finir la zone choisie",
+  "shortcuts.censor.hide": "Pas une zone (ne pas flouter)",
+  "shortcuts.censor.preview": "Aperçu flouté",
   "shortcuts.help": "Afficher cette aide",
   "shortcuts.close": "Fermer les fenêtres",
 

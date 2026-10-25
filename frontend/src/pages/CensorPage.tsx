@@ -39,7 +39,7 @@ interface Project {
   hidden: { cls: string; f0: number; f1: number }[];
   export: { file: string; size: number; seconds: number; blurred_frames: number } | null;
   stats: { zones?: number; seconds?: number; analysis_seconds?: number };
-  detect?: { fps: number; frames: number; seconds: number; gpu: boolean };
+  detect?: { v?: number; fps: number; frames: number; seconds: number; gpu: boolean };
 }
 
 interface Summary {
@@ -379,6 +379,12 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
       )}
 
       {p.error && !analyzing && <ErrorAlert error={{ code: p.error.code ?? "error", message: p.error.message, hint: p.error.hint }} />}
+      {reviewable && p.detect && (p.detect.v ?? 1) < 2 && (
+        <div className="clip-hint" style={{ marginBottom: 12 }}>
+          <span>Analysé avec une version précédente : relancez l'analyse pour profiter du suivi visuel des zones (moins de trous dans le flou). Vos zones à la main sont gardées.</span>
+          <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Réanalyser</Button>
+        </div>
+      )}
       {p.notes?.map((n) => (
         <div key={n} className="clip-hint" style={{ marginBottom: 12 }}>{n}</div>
       ))}
@@ -402,6 +408,8 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   const [drawing, setDrawing] = useState<"new" | "key" | null>(null);
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const justDrew = useRef(false); // le clic qui termine un cadre ne doit pas lancer la lecture
+  const [following, setFollowing] = useState(false);
+  const toast = useApp((s) => s.toast);
   const fps = z.fps || p.video?.fps || 25;
   const total = z.frames;
   const W = p.video!.width;
@@ -514,19 +522,93 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     setDrag(null);
     justDrew.current = true;
     setTimeout(() => (justDrew.current = false), 250);
-    if (box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01) return;
-    if (drawing === "new") {
-      const m: Manual = { id: Math.random().toString(36).slice(2, 10), keys: [{ f: frame, box }, { f: Math.min(total - 1, frame + Math.round(fps * 2)), box }] };
-      saveManual([...p.manual, m]);
-      setSelected(m.id);
-    } else if (drawing === "key" && selected) {
-      saveManual(p.manual.map((m) => (m.id === selected ? { ...m, keys: [...m.keys.filter((k) => k.f !== frame), { f: frame, box }].sort((a, b) => a.f - b.f) } : m)));
-    }
+    const mode = drawing;
     setDrawing(null);
+    if (box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01) return;
+    if (mode === "new") {
+      const id = Math.random().toString(36).slice(2, 10);
+      followFrom(frame, box, (keys) => [...p.manual, { id, keys }]);
+      setSelected(id);
+    } else if (mode === "key" && selected) {
+      // on garde les images clés d'avant, la suite est refaite en suivant la zone redessinée
+      const keep = p.manual.find((m) => m.id === selected)?.keys.filter((k) => k.f < frame) ?? [];
+      followFrom(frame, box, (keys) => p.manual.map((m) => (m.id === selected ? { ...m, keys: [...keep, ...keys] } : m)));
+    }
+  };
+
+  /** La zone tracée suit toute seule le mouvement (jusqu'à 10 s, ou jusqu'à ce qu'elle sorte du cadre). */
+  const followFrom = async (f: number, box: Box, place: (keys: { f: number; box: Box }[]) => Manual[]) => {
+    setFollowing(true);
+    try {
+      const r = await api.post<{ keys: { f: number; box: Box }[]; reason: string }>(`/api/censor/projects/${p.id}/follow`, { f, box, seconds: 10 });
+      await saveManual(place(r.keys));
+      const secs = (r.keys[r.keys.length - 1].f - f) / fps;
+      toast({
+        kind: "info",
+        title: r.reason === "flat" ? "Zone sans détail : posée pour 2 s" : `Zone suivie sur ${secs.toFixed(1).replace(".", ",")} s`,
+        body: r.reason === "lost" ? "Elle a été perdue ensuite (changement de plan ou sortie du cadre) : « Finir ici » ou « Recadrer » pour ajuster." : r.reason === "limit" ? "Allez plus loin et « Recadrer » pour continuer le suivi." : undefined,
+        timeout: 3500,
+      });
+    } catch (e) {
+      onError(e);
+    } finally {
+      setFollowing(false);
+    }
+  };
+
+  const finishHere = (m: Manual) => {
+    const b = manualAt(m, Math.min(frame, m.keys[m.keys.length - 1].f)) ?? m.keys[m.keys.length - 1].box;
+    saveManual(p.manual.map((x) => (x.id === m.id ? { ...x, keys: [...x.keys.filter((k) => k.f < frame), { f: Math.max(frame, x.keys[0].f), box: b }] } : x)));
+  };
+  const removeManual = (m: Manual) => {
+    saveManual(p.manual.filter((x) => x.id !== m.id));
+    setSelected(null);
+  };
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v || !canPlay) return;
+    if (v.paused) v.play();
+    else v.pause();
   };
 
   const sel = p.manual.find((m) => m.id === selected) ?? null;
   const here = boxesAt(frame);
+
+  // raccourcis clavier de la vérification (sauf pendant la saisie dans un champ)
+  const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keys.current = (e: KeyboardEvent) => {
+    const el = e.target as HTMLElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    const step = e.shiftKey ? Math.round(fps) : 1;
+    const done = () => e.preventDefault();
+    if (k === " ") { done(); togglePlay(); }
+    else if (k === "arrowleft") { done(); videoRef.current?.pause(); seek(frame - step); }
+    else if (k === "arrowright") { done(); videoRef.current?.pause(); seek(frame + step); }
+    else if (k === "n") { done(); jump(1); }
+    else if (k === "p") { done(); jump(-1); }
+    else if (k === "a") { done(); videoRef.current?.pause(); setDrawing(drawing === "new" ? null : "new"); }
+    else if (k === "r" && sel) { done(); videoRef.current?.pause(); setDrawing(drawing === "key" ? null : "key"); }
+    else if (k === "f" && sel) { done(); finishHere(sel); }
+    else if (k === "b") { done(); setPreview(!preview); }
+    else if (k === "escape") {
+      if (drawing || drag) { done(); setDrawing(null); setDrag(null); }
+      else if (selected) { done(); setSelected(null); }
+    } else if (k === "delete" || k === "backspace") {
+      done();
+      if (sel) removeManual(sel);
+      else {
+        const t = z.tracks.find((t) => !t.hidden && t.f0 <= frame && frame <= t.f1);
+        if (t) api.post(`/api/censor/projects/${p.id}/hide`, { track: t.id }).then(onChange).catch(onError);
+      }
+    }
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keys.current(e);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
   const listed = useMemo(() => z.tracks.slice(0, 400), [z.tracks]);
 
   return (
@@ -535,7 +617,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
         <div className="card cz-viewer">
           <div className="cz-stage" ref={stageRef} style={{ aspectRatio: `${W} / ${H}` }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
             {canPlay && p.source.path && (
-              <video ref={videoRef} src={localMediaUrl(p.source.path)} preload="auto" onError={() => setCanPlay(false)} onClick={() => !drawing && !justDrew.current && (videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause())} />
+              <video ref={videoRef} src={localMediaUrl(p.source.path)} preload="auto" onError={() => setCanPlay(false)} onClick={() => !drawing && !justDrew.current && togglePlay()} />
             )}
             {stillUrl && <img className="cz-still" src={stillUrl} alt="" draggable={false} />}
             <svg className={clsx("cz-boxes", drawing && "drawing")} viewBox="0 0 1 1" preserveAspectRatio="none">
@@ -545,22 +627,30 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
                 ))}
               {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)} height={Math.abs(drag.y1 - drag.y0)} className="draft" vectorEffect="non-scaling-stroke" />}
             </svg>
-            {drawing && <div className="cz-draw-hint">Tracez un cadre sur la zone à flouter</div>}
+            {drawing && <div className="cz-draw-hint">Tracez un cadre sur la zone à flouter : elle suivra le mouvement toute seule · Échap pour annuler</div>}
+            {following && <div className="cz-draw-hint">Suivi de la zone…</div>}
           </div>
           <div className="cz-controls">
-            <Button size="sm" variant="ghost" iconOnly icon={<SkipBack size={15} />} tip="Zone précédente" onClick={() => jump(-1)} />
-            <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={16} />} tip="Image précédente (←)" onClick={() => seek(frame - 1)} />
-            {canPlay && <Button size="sm" variant="primary" iconOnly icon={playing ? <Pause size={15} /> : <Play size={15} />} onClick={() => (videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause())} />}
-            <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={16} />} tip="Image suivante (→)" onClick={() => seek(frame + 1)} />
-            <Button size="sm" variant="ghost" iconOnly icon={<SkipForward size={15} />} tip="Zone suivante" onClick={() => jump(1)} />
+            <Button size="sm" variant="ghost" iconOnly icon={<SkipBack size={15} />} tip="Zone précédente (P)" onClick={() => jump(-1)} />
+            <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={16} />} tip="Image précédente (←, Maj+← : 1 s)" onClick={() => seek(frame - 1)} />
+            {canPlay && <Button size="sm" variant="primary" iconOnly icon={playing ? <Pause size={15} /> : <Play size={15} />} tip="Lecture / pause (Espace)" onClick={togglePlay} />}
+            <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={16} />} tip="Image suivante (→, Maj+→ : 1 s)" onClick={() => seek(frame + 1)} />
+            <Button size="sm" variant="ghost" iconOnly icon={<SkipForward size={15} />} tip="Zone suivante (N)" onClick={() => jump(1)} />
             <span className="mono cz-time">{clock(frame / fps)} <span className="faint">/ {clock(total / fps)} · image {frame}</span></span>
             <span className="spacer" />
-            <label className="row clip-check" data-tip="Montre l'image floutée telle qu'elle sera exportée (vidéo en pause)">
+            <label className="row clip-check" data-tip="Montre l'image floutée telle qu'elle sera exportée, vidéo en pause (B)">
               <Switch checked={preview} onChange={setPreview} />
               <span>{preview ? <Eye size={14} /> : <EyeOff size={14} />} Aperçu flouté</span>
             </label>
           </div>
           <Timeline marks={marks} total={total} frame={frame} onSeek={seek} />
+          <div className="cz-keys">
+            {KEYS.map(([k, l]) => (
+              <span key={k}>
+                <kbd className="kbd">{k}</kbd> {l}
+              </span>
+            ))}
+          </div>
           {!canPlay && <div className="faint" style={{ fontSize: 12, padding: "6px 14px 12px" }}>Ce format ne se lit pas dans la fenêtre : avancez image par image ou cliquez sur la frise. L'export n'est pas concerné.</div>}
         </div>
 
@@ -568,12 +658,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <span className="label">Zones à la main</span>
             <span className="spacer" />
-            <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} onClick={() => setDrawing(drawing === "new" ? null : "new")}>Ajouter une zone ici</Button>
+            <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Tracez un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Ajouter une zone ici</Button>
             {sel && (
               <>
-                <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip="Redessinez la zone à cette image : elle suit le mouvement entre vos images clés">Recadrer à cette image</Button>
-                <Button size="sm" variant="outline" tip="La zone s'arrête à cette image" onClick={() => { const b = manualAt(sel, Math.min(frame, sel.keys[sel.keys.length - 1].f)) ?? sel.keys[sel.keys.length - 1].box; saveManual(p.manual.map((m) => (m.id === sel.id ? { ...m, keys: [...m.keys.filter((k) => k.f < frame), { f: Math.max(frame, m.keys[0].f), box: b }] } : m))); }}>Finir ici</Button>
-                <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} onClick={() => { saveManual(p.manual.filter((m) => m.id !== sel.id)); setSelected(null); }}>Supprimer</Button>
+                <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip="Redessinez la zone à cette image : le suivi repart d'ici (R)">Recadrer à cette image</Button>
+                <Button size="sm" variant="outline" tip="La zone s'arrête à cette image (F)" onClick={() => finishHere(sel)}>Finir ici</Button>
+                <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} tip="Supprimer cette zone (Suppr)" onClick={() => removeManual(sel)}>Supprimer</Button>
               </>
             )}
           </div>
@@ -586,7 +676,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               ))}
             </div>
           ) : (
-            <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>Une zone ratée par l'IA ? Mettez la vidéo au bon moment, cliquez « Ajouter une zone ici » puis tracez un cadre : il dure 2 s, à ajuster avec « Recadrer » et « Finir ici ».</p>
+            <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>Une zone ratée par l'IA ? Mettez la vidéo au bon moment, appuyez sur A (ou « Ajouter une zone ici ») et tracez un cadre : la zone suit le mouvement toute seule, jusqu'à 10 s. « Recadrer » relance le suivi, « Finir ici » l'arrête.</p>
           )}
         </div>
       </div>
@@ -664,6 +754,17 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     </div>
   );
 }
+
+const KEYS: [string, string][] = [
+  ["Espace", "lecture"],
+  ["← →", "image"],
+  ["Maj + ← →", "1 s"],
+  ["N / P", "zone suivante / précédente"],
+  ["A", "ajouter une zone"],
+  ["R / F", "recadrer / finir ici"],
+  ["Suppr", "pas une zone"],
+  ["B", "aperçu flouté"],
+];
 
 function manualAt(m: Manual, f: number): Box | null {
   const k = m.keys;

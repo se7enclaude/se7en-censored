@@ -461,7 +461,7 @@ export const en: Record<string, string> = {
 
   // shortcuts
   "shortcuts.title": "Shortcuts",
-  "shortcuts.nav": "Go to tab 1 to 9",
+  "shortcuts.nav": "Censor, queue, history",
   "shortcuts.logs": "Open logs",
   "shortcuts.paste": "Paste a link (analyzed automatically)",
   "shortcuts.analyze": "Analyze the link",
@@ -469,6 +469,13 @@ export const en: Record<string, string> = {
   "shortcuts.import": "Import files (Upscale)",
   "shortcuts.preview": "Preview upscale",
   "shortcuts.sidebar": "Collapse the sidebar",
+  "shortcuts.censor.play": "Play / pause",
+  "shortcuts.censor.frame": "Previous / next frame",
+  "shortcuts.censor.zone": "Next / previous zone",
+  "shortcuts.censor.add": "Add a zone (it follows on its own)",
+  "shortcuts.censor.edit": "Reframe / end the selected zone",
+  "shortcuts.censor.hide": "Not a zone (do not blur)",
+  "shortcuts.censor.preview": "Blurred preview",
   "shortcuts.help": "Show this help",
   "shortcuts.close": "Close dialogs",
   "app.bootErrorEyebrow": "Engine unavailable",

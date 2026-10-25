@@ -19,14 +19,18 @@ from .. import ai_assets
 from ..errors import Canceled
 from ..logging_setup import get_logger
 from ..upscale import onnx_rt
+from . import follow as FW
 from . import frames as FR
-from .track import LABELS, RAW_MIN_SCORE
+from .track import CLASS_IDS, LABELS, RAW_MIN_SCORE
 
 log = get_logger("censor")
 MODEL = "nudenet_640m"
 SIDE = 640
-DETECT_VERSION = 1
+DETECT_VERSION = 2  # 2 : suivi visuel des zones entre les détections (colonne « t »)
 CHECKPOINT_EVERY = 1500  # images
+FOLLOW_OPEN = 0.3   # confiance minimale pour commencer à suivre une zone à l'image
+FOLLOW_KEEP_S = 1.5  # une zone perdue par le détecteur est suivie à l'image jusqu'à 1,5 s
+FOLLOW_MIN = 0.55   # ressemblance minimale avec la zone telle qu'elle était vue
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray, thr: float = 0.45) -> list[int]:
@@ -112,6 +116,68 @@ def _merge(res: list[tuple[int, float, list[float]]]) -> list[tuple[int, float, 
     return out
 
 
+# ------------------------------------------------------------------ suivi des zones pendant l'analyse
+class Watch:
+    """Zones vues récemment : quand le détecteur ne les retrouve plus, on les suit à l'image (ressemblance)."""
+
+    def __init__(self, keep_frames: float, step: int) -> None:
+        self.keep = keep_frames
+        self.reach = 0.6 * step  # une image sur deux en mode rapide : la zone a pu bouger deux fois plus
+        self.zones: list[dict] = []  # {cls, f (dernière vue par le détecteur), fw (suivi)}
+        self.wanted = set(CLASS_IDS.values())
+
+    def step(self, i: int, rgb: np.ndarray, found: list[tuple[int, float, list[float]]]) -> list[tuple[int, float, list[float]]]:
+        g = None
+        seen: set[int] = set()
+        for c, s, b in sorted(found, key=lambda x: -x[1]):
+            if c not in self.wanted:
+                continue
+            k = self._match(c, b, seen)
+            if k is None and s < FOLLOW_OPEN:
+                continue
+            g = FW.gray(rgb) if g is None else g
+            if k is None:
+                self.zones.append({"cls": c, "f": i, "fw": FW.Follower(g, b)})
+                seen.add(len(self.zones) - 1)
+            else:
+                z = self.zones[k]
+                z["f"] = i
+                z["fw"].refresh(g, b)
+                seen.add(k)
+        out = []
+        keep = []
+        for k, z in enumerate(self.zones):
+            if k in seen:
+                keep.append(z)
+                continue
+            if i - z["f"] > self.keep or not z["fw"].ok:
+                continue
+            g = FW.gray(rgb) if g is None else g
+            r = z["fw"].track(g, self.reach)
+            if r is None or r[1] < FOLLOW_MIN:
+                continue
+            out.append((z["cls"], float(r[1]), r[0].tolist()))
+            keep.append(z)
+        self.zones = keep
+        return out
+
+    def _match(self, c: int, b: list[float], taken: set[int]) -> int | None:
+        best, best_v = None, 0.1
+        bb = np.asarray(b, np.float32)
+        for k, z in enumerate(self.zones):
+            if k in taken or z["cls"] != c:
+                continue
+            a = z["fw"].box
+            x1, y1 = max(a[0], bb[0]), max(a[1], bb[1])
+            x2, y2 = min(a[2], bb[2]), min(a[3], bb[3])
+            inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            u = (a[2] - a[0]) * (a[3] - a[1]) + (bb[2] - bb[0]) * (bb[3] - bb[1]) - inter
+            v = inter / u if u > 0 else 0.0
+            if v > best_v:
+                best, best_v = k, v
+        return best
+
+
 # ------------------------------------------------------------------ analyse d'une vidéo
 def _store(cache: Path) -> tuple[Path, Path]:
     return cache / "detections.npz", cache / "detections.json"
@@ -122,10 +188,11 @@ def load(cache: Path) -> tuple[dict, dict] | None:
     if not (npz.exists() and meta.exists()):
         return None
     m = json.loads(meta.read_text("utf-8"))
-    if m.get("v") != DETECT_VERSION:
+    if m.get("v") not in (1, DETECT_VERSION):
         return None
     with np.load(npz) as z:
         det = {k: z[k] for k in ("f", "c", "s", "b")}
+        det["t"] = z["t"] if "t" in z.files else np.zeros(len(det["f"]), np.int8)
     return det, m
 
 
@@ -136,10 +203,12 @@ def _save(cache: Path, rows: list, meta: dict) -> None:
         c = np.array([r[1] for r in rows], np.int8)
         s = np.array([r[2] for r in rows], np.float16)
         b = np.array([r[3] for r in rows], np.float32).reshape(-1, 4)
+        t = np.array([r[4] if len(r) > 4 else 0 for r in rows], np.int8)
     else:
         f, c, s, b = (np.zeros(0, np.int32), np.zeros(0, np.int8), np.zeros(0, np.float16), np.zeros((0, 4), np.float32))
+        t = np.zeros(0, np.int8)
     tmp = npz.with_name("detections.tmp.npz")
-    np.savez_compressed(tmp, f=f, c=c, s=s, b=b)
+    np.savez_compressed(tmp, f=f, c=c, s=s, b=b, t=t)
     tmp.replace(npz)
     mf.write_text(json.dumps(meta), "utf-8")
 
@@ -154,12 +223,14 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
             "next": 0, "done": False}
     rows: list = []
     prev = load(cache)
-    if prev and not prev[1].get("done") and prev[1].get("step") == step and prev[1].get("mirror") == mirror \
-            and abs(prev[1].get("fps", 0) - fps) < 1e-3:
+    same = bool(prev) and prev[1].get("v") == DETECT_VERSION and prev[1].get("step") == step \
+        and prev[1].get("mirror") == mirror and abs(prev[1].get("fps", 0) - fps) < 1e-3
+    if same and not prev[1].get("done"):
         det, meta = prev
-        rows = [(int(f), int(c), float(s), b.tolist()) for f, c, s, b in zip(det["f"], det["c"], det["s"], det["b"])]
+        rows = [(int(f), int(c), float(s), b.tolist(), int(t))
+                for f, c, s, b, t in zip(det["f"], det["c"], det["s"], det["b"], det["t"])]
         log.info("Resuming the analysis at frame %d / %d", meta["next"], total)
-    elif prev and prev[1].get("done") and prev[1].get("step") == step and prev[1].get("mirror") == mirror:
+    elif same:
         return prev
 
     progress(0.0, "Chargement du détecteur", None)
@@ -183,6 +254,7 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
 
     th = threading.Thread(target=feed, name="censor-decode", daemon=True)
     th.start()
+    watch = Watch(fps * FOLLOW_KEEP_S, step)
     t0 = time.monotonic()
     done_frames = 0
     last_ui = 0.0
@@ -195,8 +267,11 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
             if cancel.is_set():
                 raise Canceled()
             i, fr = item
-            for c, s, b in detector.run(fr, mirror):
-                rows.append((i, c, s, b))
+            found = detector.run(fr, mirror)
+            for c, s, b in found:
+                rows.append((i, c, s, b, 0))
+            for c, s, b in watch.step(i, fr, found):  # zones perdues par le détecteur, suivies à l'image
+                rows.append((i, c, s, b, 1))
             done_frames += 1
             last_idx = i
             if done_frames % CHECKPOINT_EVERY == 0:

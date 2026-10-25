@@ -2,6 +2,18 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.1.0": {
+        "fr": ["Suivi visuel : quand l'IA perd une zone une seconde (mouvement, flou de bougé, plan sombre), elle est "
+               "suivie à l'image au lieu de disparaître. Relancez l'analyse d'un projet pour en profiter.",
+               "Les zones tracées à la main suivent le mouvement toute seules (jusqu'à 10 s, ou jusqu'à ce qu'elles sortent "
+               "du cadre). « Recadrer » relance le suivi.",
+               "Raccourcis clavier : Espace, ← →, Maj + ← → (1 s), N / P (zone suivante / précédente), A (ajouter une zone), "
+               "R / F (recadrer / finir ici), Suppr (pas une zone), B (aperçu flouté)."],
+        "en": ["Visual tracking: when the AI loses a zone for a moment (motion, blur, dark shot), it is followed in the "
+               "picture instead of disappearing. Analyse a project again to benefit.",
+               "Zones drawn by hand follow the motion on their own (up to 10 s, or until they leave the frame).",
+               "Keyboard shortcuts: Space, ← →, Shift + ← → (1 s), N / P, A, R / F, Delete, B."],
+    },
     "1.0.1": {
         "fr": ["L'écran de chargement et les réglages sont ceux de se7en Censored (ils montraient encore ceux de "
                "se7en Clip et se7en Download)."],
