@@ -1,0 +1,98 @@
+/* se7en design tokens — from design-system/tokens/*.css (Download Everything Design System).
+   Fonts are bundled locally (@fontsource) so the desktop app works offline. */
+@import "@fontsource/syne/latin-700.css";
+@import "@fontsource/syne/latin-800.css";
+@import "@fontsource/geist/latin-400.css";
+@import "@fontsource/geist/latin-500.css";
+@import "@fontsource/geist/latin-600.css";
+@import "@fontsource/geist/latin-700.css";
+@import "@fontsource/geist-mono/latin-400.css";
+@import "@fontsource/geist-mono/latin-500.css";
+@import "@fontsource/geist-mono/latin-600.css";
+@import "@fontsource/geist-mono/latin-700.css";
+
+:root {
+  /* Ink — near-black neutrals */
+  --ink-0: #050505; --ink-1: #0b0b0c; --ink-2: #121213; --ink-3: #1a1a1c; --ink-4: #242427; --ink-5: #333337;
+  /* Fog — warm whites */
+  --fog-0: #ffffff; --fog-1: #f4f3f1; --fog-2: #b9b8b5; --fog-3: #7d7c79; --fog-4: #4e4d4b;
+  /* Steel — light theme greys */
+  --steel-100: #e6e9ed; --steel-200: #d3d8de; --steel-300: #bfc6ce; --steel-400: #9aa3ad; --steel-500: #77808b;
+  /* Signal red — the single accent (the "7") */
+  --red-100: #FAE3E0; --red-300: #EFA39A; --red-400: #E67366; --red-500: #DF4E3E; --red-600: #4D8A99; --red-700: #345F6A; --red-900: #0F191C;
+  /* Semantic */
+  --green-400: #3fd68f; --green-900: #0c2519; --amber-400: #f5b544; --amber-900: #2a1f0b; --blue-400: #6fa8ff; --blue-900: #0e1b31;
+
+  --bg-app: var(--ink-0);
+  --surface-1: var(--ink-1); --surface-2: var(--ink-2); --surface-3: var(--ink-3); --surface-raised: var(--ink-3);
+  --surface-glass: rgba(11, 11, 12, 0.66); --surface-glass-light: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.07); --border-default: rgba(255, 255, 255, 0.12); --border-strong: rgba(255, 255, 255, 0.26);
+  --text-primary: var(--fog-1); --text-secondary: var(--fog-2); --text-tertiary: var(--fog-3); --text-disabled: var(--fog-4); --text-on-accent: #fff;
+  --accent: var(--red-500); --accent-hover: var(--red-400); --accent-press: var(--red-600); --accent-soft: var(--red-900); --accent-text: var(--red-400);
+  --accent-rgb: 217, 131, 120;
+  --success: var(--green-400); --success-soft: var(--green-900);
+  --warning: var(--amber-400); --warning-soft: var(--amber-900);
+  --info: var(--blue-400); --info-soft: var(--blue-900);
+  --danger: var(--red-400); --danger-soft: var(--red-900);
+  --focus-ring: rgba(223, 78, 62, 0.45);
+
+  /* Type */
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", Consolas, monospace;
+  --tracking-display: -0.045em; --tracking-heading: -0.02em; --tracking-label: 0.14em;
+
+  /* Spacing / radii (near-square geometry) */
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 12px; --radius-pill: 999px;
+  --radius-control: 4px;
+  --control-sm: 32px; --control-md: 40px; --control-lg: 56px;
+  --topbar-h: 64px; --content-max: 1180px;
+
+  /* Effects */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+  --shadow-3: 0 40px 100px -30px rgba(0, 0, 0, 0.85);
+  --shadow-accent: 0 0 0 1px rgba(223, 78, 62, 0.6), 0 10px 40px -8px rgba(223, 78, 62, 0.55);
+  --glow-accent: 0 0 24px rgba(223, 78, 62, 0.55);
+  --inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --blur-glass: saturate(130%) blur(20px);
+  --scanlines: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 3px);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms; --dur-base: 260ms; --dur-slow: 700ms;
+  --press-scale: 0.98;
+  --app-glow: radial-gradient(90% 70% at 85% 0%, #0D1112, var(--ink-0) 55%);
+
+  /* Aliases used by the component code */
+  --bg: var(--bg-app); --bg-2: var(--surface-1); --bg-elev: var(--surface-2); --surface: var(--surface-1);
+  --surface-solid: var(--surface-2); --border: var(--border-subtle);
+  --text: var(--text-primary); --text-2: var(--text-secondary); --text-3: var(--text-tertiary);
+  --grad: var(--accent); --grad-soft: rgba(223, 78, 62, 0.07);
+  --font: var(--font-sans); --mono: var(--font-mono);
+  --r-xs: var(--radius-xs); --r-sm: var(--radius-sm); --r-md: var(--radius-md); --r-lg: var(--radius-lg); --r-xl: var(--radius-xl);
+  --ease: var(--ease-out); --ease-spring: var(--ease-out);
+  --t-fast: var(--dur-fast); --t-med: var(--dur-base); --t-slow: var(--dur-slow);
+  --shadow-sm: var(--shadow-1); --shadow-md: var(--shadow-2); --shadow-lg: var(--shadow-3); --glow: var(--shadow-accent);
+  --scrollbar: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: var(--fog-1);
+  --surface-1: #ffffff; --surface-2: #ffffff; --surface-3: var(--steel-100); --surface-raised: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.7); --surface-glass-light: rgba(0, 0, 0, 0.04);
+  --border-subtle: rgba(10, 10, 10, 0.07); --border-default: rgba(10, 10, 10, 0.12); --border-strong: rgba(10, 10, 10, 0.3);
+  --text-primary: #0b0b0c; --text-secondary: #3e3d3b; --text-tertiary: #7d7c79; --text-disabled: #b9b8b5;
+  --accent-soft: var(--red-100); --accent-text: var(--red-600);
+  --success-soft: #ddf7ea; --warning-soft: #fcefd6; --info-soft: #e2edff; --danger-soft: var(--red-100);
+  --scanlines: none;
+  --app-glow: radial-gradient(90% 70% at 85% 0%, #F9E4E1, var(--fog-1) 55%);
+  --grad-soft: rgba(223, 78, 62, 0.06);
+  --scrollbar: rgba(10, 10, 10, 0.15);
+}
+[data-theme="dark"] { color-scheme: dark; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+}
+:root[data-motion="reduced"] { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }

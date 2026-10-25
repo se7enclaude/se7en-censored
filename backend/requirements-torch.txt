@@ -1,0 +1,5 @@
+# Optional PyTorch backend (SwinIR, HAT, DAT, ESRGAN variants... via spandrel).
+# RTX 50xx (Blackwell) needs CUDA 12.8+ wheels:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements-torch.txt
+spandrel>=0.4

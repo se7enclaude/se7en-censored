@@ -1,0 +1,30 @@
+se7en Censored — floutage automatique des parties intimes, 100 % sur votre PC
+==========================================================================
+
+Version installée (recommandée) : installez-la depuis Seventh OS, ou lancez se7en-Censored-Setup.exe.
+  - FFmpeg et le détecteur (NudeNet) sont inclus : rien d'autre à télécharger.
+  - Une carte graphique (NVIDIA, AMD ou Intel) est fortement conseillée : un film de 2 h s'analyse en 20 à
+    40 minutes avec elle, beaucoup plus lentement sans.
+  - se7en Censored se met à jour tout seul.
+  - Si Windows affiche "Windows a protégé votre ordinateur" :
+    cliquer sur "Informations complémentaires" puis "Exécuter quand même".
+
+Utilisation :
+1. Glissez une vidéo, choisissez-la, ou collez son chemin ou un lien.
+2. L'analyse passe sur toutes les images (vous pouvez l'arrêter et la reprendre plus tard).
+3. Vérifiez : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,
+   "Ajouter une zone ici" floute ce que l'IA a raté. Réglez la sensibilité, la marge et l'effet.
+4. "Exporter la vidéo floutée" : le fichier "<nom> (censuré)" est dans Vidéos\se7en Censored,
+   avec le son d'origine.
+
+Aucune détection n'est parfaite : regardez la frise avant de diffuser.
+Flouter les zones intimes ne rend pas une vidéo conforme à toutes les règles (scènes sexuelles, droits
+d'auteur des films) : vous restez responsable de ce que vous diffusez.
+
+Version portable (ce dossier) :
+1. Extraire TOUT le zip (clic droit sur le .zip > Extraire tout...).
+2. Double-cliquer sur se7en-censored.exe. Vos réglages restent dans le dossier "data" à côté.
+
+En cas de problème : bouton Journal en haut à droite, ou envoyer le fichier data\logs\crash.log.
+
+Le détecteur est NudeNet (notAI-tech, licence AGPL-3.0) : https://github.com/notAI-tech/NudeNet
