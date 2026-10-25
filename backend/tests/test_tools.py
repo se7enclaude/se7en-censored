@@ -305,10 +305,15 @@ def test_statistics(tmp_path):
     from medialab.tools import stats
 
     db = Database(tmp_path / "s.db")
+    from datetime import datetime, timedelta
+
     now = time.time()
+    today = datetime.fromtimestamp(now)
     for i in range(5):
+        # calendar days, not 86400 s: a 25-hour day (end of summer time) would put two entries on the same date
+        at = (today - timedelta(days=i)).timestamp()
         db.add_history({"kind": "download", "title": f"v{i}", "platform": "youtube", "size": 1000 * (i + 1),
-                        "duration": 60, "format": "MP4 · H264", "resolution": "1080p", "created_at": now - i * 86400,
+                        "duration": 60, "format": "MP4 · H264", "resolution": "1080p", "created_at": at,
                         "meta": {"platform_name": "YouTube", "uploader": "Chan", "elapsed": 2}})
     db.add_history({"kind": "upscale", "title": "img", "size": 5000, "created_at": now, "meta": {"elapsed": 3}})
     s = stats.compute(db, 30, check_files=False)
