@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.1.1": {
+        "fr": ["Nouvelle animation de lancement : « la mosaïque », le logo apparaît sous de gros pixels de censure qui s'affinent jusqu'à devenir net."],
+        "en": ['New launch animation: the logo appears under big censor pixels that get finer until it is sharp.'],
+    },
     "1.1.0": {
         "fr": ["Suivi visuel : quand l'IA perd une zone une seconde (mouvement, flou de bougé, plan sombre), elle est "
                "suivie à l'image au lieu de disparaître. Relancez l'analyse d'un projet pour en profiter.",
