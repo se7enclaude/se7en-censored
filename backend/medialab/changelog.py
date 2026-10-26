@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.1.2": {
+        "fr": ["Détection plus stricte : seule la vraie nudité est floutée. Les fausses alertes d'un instant (verre, "
+               "bout de bras, reflet) et les torses d'homme pris pour des poitrines sont écartés. Tes projets déjà "
+               "analysés en profitent sans refaire l'analyse."],
+        "en": ["Stricter detection: only real nudity is blurred. Brief false alarms (a glass, part of an arm, a "
+               "reflection) and male chests mistaken for breasts are left alone. Projects already analysed benefit "
+               "without a new analysis."],
+    },
     "1.1.1": {
         "fr": ["Nouvelle animation de lancement : « la mosaïque », le logo apparaît sous de gros pixels de censure qui s'affinent jusqu'à devenir net."],
         "en": ['New launch animation: the logo appears under big censor pixels that get finer until it is sharp.'],
