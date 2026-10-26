@@ -2,6 +2,21 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.2.0": {
+        "fr": ["2e passe : après l'analyse, les moments où l'IA a vu de la nudité sont relus de plus près. Un 2e "
+               "modèle (CLIP) vérifie chaque zone avant de la flouter : moins de fausses alertes (torses d'homme, "
+               "objets). Les petites parties ou celles au loin sont mieux trouvées.",
+               "Changements de plan : une zone ne déborde plus jamais sur le plan suivant, qu'elle vienne de l'IA ou "
+               "de toi.",
+               "Projets déjà analysés : « Lancer la 2e passe » suffit, pas besoin de tout refaire. L'option "
+               "« 2e vérification » peut être coupée."],
+        "en": ["Second pass: after the analysis, the moments where the AI saw nudity are looked at more closely. A "
+               "second model (CLIP) checks each zone before blurring it: fewer false alarms (male chests, objects). "
+               "Small or distant parts are found more often.",
+               "Shot changes: a zone never spills over into the next shot, whether it comes from the AI or from you.",
+               "Projects already analysed: \"Run the second pass\" is enough, no full re-analysis. The \"Second "
+               "check\" option can be turned off."],
+    },
     "1.1.3": {
         "fr": ["Zones à la main : au choix, une « Zone qui suit » le mouvement (A) ou une « Zone fixe » (Z), un cadre "
                "qui reste où tu l'as posé. « Finir ici » (F) l'arrête plus tôt ou l'allonge."],

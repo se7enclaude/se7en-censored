@@ -1,9 +1,13 @@
-## se7en Censored 1.1.3
+## se7en Censored 1.2.0
 
-- **Zone fixe ou zone qui suit : c'est toi qui choisis.** Dans « Zones à la main », « Zone qui suit » (A) suit le
-  mouvement tout seul comme avant ; « Zone fixe » (Z) pose un cadre qui reste exactement où tu l'as tracé.
-- Une zone fixe dure 2 s à la pose : avance jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.
-  « Recadrer » (R) redessine le cadre, toujours sans suivi.
+- **2e passe.** Après l'analyse, les moments où l'IA a vu de la nudité (quelques % de la vidéo) sont relus de plus
+  près : l'image est agrandie et lue en morceaux, et un 2e modèle (CLIP) vérifie chaque zone avant de la flouter.
+  Moins de fausses alertes (torses d'homme, objets), et les petites parties ou celles au loin sont mieux trouvées.
+- **Changements de plan.** Une zone ne déborde plus sur le plan suivant : ni celles de l'IA, ni tes zones qui suivent,
+  ni tes zones fixes.
+- **Projets déjà analysés :** un bouton « Lancer la 2e passe » suffit, sans refaire l'analyse. L'option
+  « 2e vérification » peut être coupée, et le curseur « Sensibilité » règle sa sévérité.
+- Le modèle de vérification (352 Mo) est téléchargé une seule fois, au premier usage.
 
 Tes projets et tes réglages sont gardés.
 

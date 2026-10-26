@@ -81,3 +81,12 @@ def test_models_are_listed_with_licenses(ai_models):
     ms = {m.id: m for m in list_models()}
     assert ms["onnx:ultra_sharp_x4"].installed and ms["onnx:ultra_sharp_x4"].noncommercial
     assert "face" in ms["onnx:nomos8k_sc_x4"].categories
+
+
+def test_model_hashes_are_complete():
+    """A truncated hash makes every download fail its check."""
+    import re
+
+    from medialab import ai_assets
+    for a in ai_assets.ASSETS.values():
+        assert re.fullmatch(r"[0-9a-f]{64}", a.sha256), a.id
