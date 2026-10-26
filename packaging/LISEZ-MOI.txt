@@ -13,7 +13,7 @@ Utilisation :
 1. Glissez une vidéo, choisissez-la, ou collez son chemin ou un lien.
 2. L'analyse passe sur toutes les images (vous pouvez l'arrêter et la reprendre plus tard).
 3. Vérifiez : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,
-   "Ajouter une zone ici" floute ce que l'IA a raté. Réglez la sensibilité, la marge et l'effet.
+   "Zone qui suit" ou "Zone fixe" floute ce que l'IA a raté. Réglez la sensibilité, la marge et l'effet.
 4. "Exporter la vidéo floutée" : le fichier "<nom> (censuré)" est dans Vidéos\se7en Censored,
    avec le son d'origine.
 

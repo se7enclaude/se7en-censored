@@ -449,6 +449,7 @@ export const fr: Record<string, string> = {
   "shortcuts.censor.frame": "Image précédente / suivante",
   "shortcuts.censor.zone": "Zone suivante / précédente",
   "shortcuts.censor.add": "Ajouter une zone (elle suit toute seule)",
+  "shortcuts.censor.fixed": "Ajouter une zone fixe (elle ne bouge pas)",
   "shortcuts.censor.edit": "Recadrer / finir la zone choisie",
   "shortcuts.censor.hide": "Pas une zone (ne pas flouter)",
   "shortcuts.censor.preview": "Aperçu flouté",

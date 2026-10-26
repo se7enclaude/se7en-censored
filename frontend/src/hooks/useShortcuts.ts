@@ -9,6 +9,7 @@ export const SHORTCUTS: { keys: string; key: string }[] = [
   { keys: "← →  (Maj : 1 s)", key: "shortcuts.censor.frame" },
   { keys: "N / P", key: "shortcuts.censor.zone" },
   { keys: "A", key: "shortcuts.censor.add" },
+  { keys: "Z", key: "shortcuts.censor.fixed" },
   { keys: "R / F", key: "shortcuts.censor.edit" },
   { keys: "Suppr", key: "shortcuts.censor.hide" },
   { keys: "B", key: "shortcuts.censor.preview" },

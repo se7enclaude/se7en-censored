@@ -473,6 +473,7 @@ export const en: Record<string, string> = {
   "shortcuts.censor.frame": "Previous / next frame",
   "shortcuts.censor.zone": "Next / previous zone",
   "shortcuts.censor.add": "Add a zone (it follows on its own)",
+  "shortcuts.censor.fixed": "Add a fixed zone (it does not move)",
   "shortcuts.censor.edit": "Reframe / end the selected zone",
   "shortcuts.censor.hide": "Not a zone (do not blur)",
   "shortcuts.censor.preview": "Blurred preview",

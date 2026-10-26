@@ -275,3 +275,27 @@ def test_manual_zone_follows_on_a_real_video(tmp_path, ffmpeg_bin):
     x_expected = (60 + 2.0 * 120) / 640
     assert abs(end["box"][0] - x_expected) < 0.02 and end["f"] == 50
     P.delete(p["id"])
+
+
+def test_fixed_manual_zone_is_kept_as_drawn(tmp_path):
+    """Une zone posée à la main « fixe » garde son drapeau (pas de suivi) ; une zone qui suit n'en a pas."""
+    from fastapi.testclient import TestClient
+    from medialab.app import Services, create_app
+    from medialab.censor import detect
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"\0")
+    p = P.create(str(src))
+    P.patch(p["id"], {"status": "review", "video": {"fps": 25.0, "duration": 4.0, "width": 320, "height": 240}})
+    detect._save(P.cache_dir(p["id"]), [], {"v": detect.DETECT_VERSION, "fps": 25.0, "frames": 100, "step": 1,
+                                           "done": True})
+    box = [0.1, 0.1, 0.3, 0.3]
+    manual = [{"id": "a", "fixed": True, "keys": [{"f": 10, "box": box}, {"f": 60, "box": box}]},
+              {"id": "b", "keys": [{"f": 0, "box": box}, {"f": 5, "box": [0.2, 0.1, 0.4, 0.3]}]}]
+    with TestClient(create_app(Services(token="t"))) as c:
+        r = c.put(f"/api/censor/projects/{p['id']}/manual", json={"manual": manual}, headers={"X-MediaLab-Token": "t"})
+    assert r.status_code == 200, r.text
+    saved = P.load(p["id"])["manual"]
+    assert saved[0]["fixed"] is True and "fixed" not in saved[1]
+    assert T.manual_box(saved[0], 35).tolist() == pytest.approx(box)   # même cadre du début à la fin
+    assert saved[0]["keys"][-1]["f"] == 60
+    P.delete(p["id"])

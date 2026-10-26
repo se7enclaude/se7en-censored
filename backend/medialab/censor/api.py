@@ -192,7 +192,10 @@ def register(app: FastAPI, S) -> None:
                 keys = [{"f": int(k["f"]), "box": [float(np.clip(v, 0, 1)) for v in k["box"]][:4]}
                         for k in z.get("keys") or [] if len(k.get("box") or []) == 4]
                 if keys:
-                    clean.append({"id": str(z.get("id") or len(clean)), "keys": sorted(keys, key=lambda k: k["f"])})
+                    zone = {"id": str(z.get("id") or len(clean)), "keys": sorted(keys, key=lambda k: k["f"])}
+                    if z.get("fixed"):
+                        zone["fixed"] = True  # zone posée telle quelle, sans suivi du mouvement
+                    clean.append(zone)
             project = P.load(pid)
             project["manual"] = clean
             project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
