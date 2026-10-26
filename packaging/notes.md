@@ -1,12 +1,9 @@
-## se7en Censored 1.1.2
+## se7en Censored 1.1.3
 
-- **Détection plus stricte : seule la vraie nudité est floutée.** Une zone n'est floutée que si l'IA l'a vue
-  franchement pendant au moins un quart de seconde : les fausses alertes d'un instant (verre, bout de bras, reflet)
-  disparaissent. Les torses d'homme pris pour des poitrines sont écartés. Une zone brève reste floutée si une nudité
-  est déjà à l'écran au même moment, pour ne rien rater.
-- Sur un film déjà vérifié : 65 fausses zones → 12, toutes les vraies zones gardées.
-- Tes projets déjà analysés en profitent sans refaire l'analyse ; le curseur « Sensibilité » reste là si tu veux
-  flouter au moindre doute.
+- **Zone fixe ou zone qui suit : c'est toi qui choisis.** Dans « Zones à la main », « Zone qui suit » (A) suit le
+  mouvement tout seul comme avant ; « Zone fixe » (Z) pose un cadre qui reste exactement où tu l'as tracé.
+- Une zone fixe dure 2 s à la pose : avance jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.
+  « Recadrer » (R) redessine le cadre, toujours sans suivi.
 
 Tes projets et tes réglages sont gardés.
 

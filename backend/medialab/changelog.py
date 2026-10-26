@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.1.3": {
+        "fr": ["Zones à la main : au choix, une « Zone qui suit » le mouvement (A) ou une « Zone fixe » (Z), un cadre "
+               "qui reste où tu l'as posé. « Finir ici » (F) l'arrête plus tôt ou l'allonge."],
+        "en": ["Manual zones: choose a \"Following zone\" that tracks the movement (A) or a \"Fixed zone\" (Z), a box "
+               "that stays where you put it. \"End here\" (F) shortens or extends it."],
+    },
     "1.1.2": {
         "fr": ["Détection plus stricte : seule la vraie nudité est floutée. Les fausses alertes d'un instant (verre, "
                "bout de bras, reflet) et les torses d'homme pris pour des poitrines sont écartés. Tes projets déjà "
