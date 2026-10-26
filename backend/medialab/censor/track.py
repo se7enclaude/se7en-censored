@@ -2,6 +2,7 @@
 
 Le détecteur rate parfois une image, tremble d'une image à l'autre ou voit une zone une seule fois. Ici :
   - les détections d'une même classe qui se suivent deviennent une piste (association par recouvrement) ;
+  - une piste n'est floutée que si elle est confirmée (vue franchement assez longtemps, pas un torse d'homme) ;
   - les images manquantes au milieu d'une piste sont comblées (interpolation) ;
   - la position est lissée, la zone agrandie d'une marge et gardée un peu avant / après ;
   - les zones ajoutées à la main (images clés) et les pistes masquées par l'utilisateur sont appliquées.
@@ -49,6 +50,10 @@ class Params:
     keep_ratio: float = 0.45       # une zone déjà suivie continue jusqu'à 45 % du seuil (hystérésis)
     smooth: int = 5                # lissage de la position sur 5 images
     match_iou: float = 0.15        # recouvrement minimal pour continuer une piste
+    confirm_s: float = 0.25        # une zone n'est floutée que si le détecteur l'a vue franchement 0,25 s au moins
+    male_ratio: float = 0.8        # « poitrine » doublée d'un torse masculin presque aussi sûr : c'est un torse
+    male_share: float = 0.5        # … sur plus de la moitié de ses images : la zone est écartée
+    scene_s: float = 1.0           # zone moins sûre gardée si une nudité confirmée est à l'écran à 1 s près
 
     @classmethod
     def from_options(cls, o: dict) -> "Params":
@@ -122,8 +127,22 @@ def _expand(boxes: np.ndarray, margin: float) -> np.ndarray:
     return np.clip(out, 0.0, 1.0)
 
 
-def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
-    """``det`` : tableaux ``f`` (image), ``c`` (classe, index de LABELS), ``s`` (confiance), ``b`` (N×4)."""
+def _male_lookalike(f: np.ndarray, c: np.ndarray, s: np.ndarray, b: np.ndarray, tr: np.ndarray,
+                    ratio: float) -> np.ndarray:
+    """Poitrines vues au même endroit, à la même image, comme torse masculin presque aussi sûr (pecs)."""
+    out = np.zeros(len(f), bool)
+    fb, mb = LABELS.index("FEMALE_BREAST_EXPOSED"), LABELS.index("MALE_BREAST_EXPOSED")
+    males: dict[int, list[int]] = {}
+    for k in np.flatnonzero((c == mb) & (tr == 0)):
+        males.setdefault(int(f[k]), []).append(int(k))
+    for k in np.flatnonzero((c == fb) & (tr == 0)):
+        out[k] = any(s[m] >= ratio * s[k] and iou(b[k], b[m]) > 0.2 for m in males.get(int(f[k]), ()))
+    return out
+
+
+def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[Track]:
+    """``det`` : tableaux ``f`` (image), ``c`` (classe, index de LABELS), ``s`` (confiance), ``b`` (N×4).
+    ``step`` : une image analysée sur ``step`` (mode rapide : 2)."""
     fps = fps or 25.0
     thr = threshold(p.sensitivity)
     low = max(RAW_MIN_SCORE, thr * p.keep_ratio)  # pour continuer une zone ; il faut ``thr`` pour en ouvrir une
@@ -135,12 +154,14 @@ def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
     if not len(f):
         return []
     # tr = 1 : position suivie à l'image (detect.Watch), pas vue par le détecteur : ne sert qu'à prolonger une zone
+    b = b.astype(np.float32).reshape(-1, 4)
+    male = _male_lookalike(f, c, s.astype(np.float32), b, tr, p.male_ratio)
     keep = np.isin(c, list(wanted)) & ((s >= low) | (tr == 1))
-    f, c, s, b, tr = f[keep], c[keep], s[keep].astype(np.float32), b[keep].astype(np.float32).reshape(-1, 4), tr[keep]
+    f, c, s, b, tr, male = f[keep], c[keep], s[keep].astype(np.float32), b[keep], tr[keep], male[keep]
     order = np.lexsort((-s, tr, f))  # par image, les vraies détections d'abord, les plus confiantes en premier
-    f, c, s, b, tr = f[order], c[order], s[order], b[order], tr[order]
+    f, c, s, b, tr, male = f[order], c[order], s[order], b[order], tr[order], male[order]
 
-    raw: list[dict] = []  # pistes en construction : {cls, obs: [(f, box, score, suivie)]}
+    raw: list[dict] = []  # pistes en construction : {cls, obs: [(f, box, score, suivie, torse)]}
     open_by_cls: dict[int, list[dict]] = {}
     i = 0
     n = len(f)
@@ -165,22 +186,40 @@ def build(det: dict, fps: float, frames: int, p: Params) -> list[Track]:
                 if best is None:
                     if tr[k] or s[k] < thr:
                         continue  # trop incertain (ou seulement suivi) pour ouvrir une nouvelle zone
-                    t = {"cls": int(cls), "obs": [(frame, b[k], float(s[k]), False)]}
+                    t = {"cls": int(cls), "obs": [(frame, b[k], float(s[k]), False, bool(male[k]))]}
                     raw.append(t)
                     live.append(t)
                     used.add(len(live) - 1)
                 else:
-                    live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k])))
+                    live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k]), bool(male[k])))
                     used.add(best)
         i = j
 
-    tracks: list[Track] = []
+    # Une zone n'est floutée que si elle est confirmée : vue franchement (au-dessus du seuil) assez longtemps, et
+    # sûre en moyenne. Une zone vue plus brièvement n'est gardée que si une nudité confirmée est à l'écran au même
+    # moment (même scène). Le reste — verre, bout de bras, reflet vus un instant — est écarté.
+    need = max(2, int(round(p.confirm_s * fps / max(1, step))))
+    need = min(need, max(1, frames // max(1, step)))  # vidéo très courte (quelques images)
+    near = int(round(p.scene_s * fps))
+    sure: list[dict] = []
+    maybe: list[dict] = []
     for t in raw:
+        real = [o for o in t["obs"] if not o[3]]
+        scores = np.array([o[2] for o in real])
+        if sum(o[4] for o in real) > p.male_share * len(real):
+            continue  # torse d'homme (pecs) pris pour une poitrine
+        if int((scores >= thr).sum()) >= need and float(scores.mean()) >= thr:
+            sure.append(t)
+        elif len(real) >= 2 or float(scores.max()) >= thr + 0.15:
+            maybe.append(t)
+    spans = [(t["obs"][0][0] - near, t["obs"][-1][0] + near) for t in sure]
+    maybe = [t for t in maybe if any(lo <= t["obs"][-1][0] and t["obs"][0][0] <= hi for lo, hi in spans)]
+
+    tracks: list[Track] = []
+    for t in sorted(sure + maybe, key=lambda t: t["obs"][0][0]):
         obs = t["obs"]
         real = [o for o in obs if not o[3]]
         top = max(o[2] for o in real)
-        if len(real) < 2 and top < thr + 0.15:
-            continue  # vue une seule fois et sans certitude : sans doute une fausse alerte
         fs = np.array([o[0] for o in obs])
         bs = np.stack([o[1] for o in obs])
         a, z = int(fs[0]), int(fs[-1])

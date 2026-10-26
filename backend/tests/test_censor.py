@@ -43,11 +43,40 @@ def test_long_gap_splits_tracks():
     assert len(tracks) == 2
 
 
-def test_single_weak_detection_is_dropped_but_strong_one_kept():
+def test_isolated_detections_are_dropped():
     p = T.Params(sensitivity=65)
-    weak = T.build(det([(5, BREAST, 0.31, [0.1, 0.1, 0.2, 0.2])]), 25.0, 100, p)
-    strong = T.build(det([(5, BREAST, 0.8, [0.1, 0.1, 0.2, 0.2])]), 25.0, 100, p)
-    assert weak == [] and len(strong) == 1
+    single = T.build(det([(5, BREAST, 0.8, [0.1, 0.1, 0.2, 0.2])]), 25.0, 100, p)
+    flash = T.build(det(moving(0, 3, score=0.7)), 25.0, 100, p)  # 4 images : un verre, un bout de bras…
+    assert single == [] and flash == []
+    assert len(T.build(det(moving(0, 7, score=0.7)), 25.0, 100, p)) == 1  # 8 images (0,3 s) : confirmée
+
+
+def test_zone_must_be_sure_on_average():
+    # ouverte une fois au-dessus du seuil (0,29) puis vue longtemps à peine : écartée
+    rows = [(f, BREAST, 0.35 if f % 5 == 0 else 0.18, [0.2, 0.3, 0.3, 0.42]) for f in range(60)]
+    assert T.build(det(rows), 25.0, 100, T.Params()) == []
+    assert len(T.build(det(moving(0, 59, score=0.4, dx=0)), 25.0, 100, T.Params())) == 1
+
+
+def test_fast_mode_needs_fewer_frames():
+    rows = [r for r in moving(0, 9, score=0.7) if r[0] % 2 == 0]  # mode rapide : une image sur deux
+    assert T.build(det(rows), 25.0, 100, T.Params()) == []
+    assert len(T.build(det(rows), 25.0, 100, T.Params(), step=2)) == 1
+
+
+def test_male_chest_is_not_a_breast():
+    MB = T.LABELS.index("MALE_BREAST_EXPOSED")
+    pecs = moving(0, 30, score=0.6) + moving(0, 30, cls=MB, score=0.55)  # même endroit, presque aussi sûr
+    assert T.build(det(pecs), 25.0, 100, T.Params()) == []
+    breast = moving(0, 30, score=0.7) + moving(0, 30, cls=MB, score=0.3)  # le torse masculin est bien moins sûr
+    assert len(T.build(det(breast), 25.0, 100, T.Params())) == 1
+
+
+def test_brief_zone_kept_when_nudity_is_on_screen():
+    brief = moving(20, 23, cls=MALE, score=0.6, x0=0.6, dx=0)  # 4 images seulement
+    assert T.build(det(brief), 25.0, 100, T.Params()) == []
+    both = T.build(det(brief + moving(0, 40, score=0.7)), 25.0, 100, T.Params())
+    assert sorted(t.cls for t in both) == ["FEMALE_BREAST_EXPOSED", "MALE_GENITALIA_EXPOSED"]
 
 
 def test_classes_and_sensitivity_filter():

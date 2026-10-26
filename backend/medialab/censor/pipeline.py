@@ -118,7 +118,7 @@ def zones(project: dict) -> tuple[list[T.Track], dict]:
         hit = _zones_cache.get(pid)
         if hit and hit[0] == key:
             return hit[1], meta
-    tracks = T.build(det, float(meta["fps"]), int(meta["frames"]), params)
+    tracks = T.build(det, float(meta["fps"]), int(meta["frames"]), params, int(meta.get("step") or 1))
     with _zones_lock:
         _zones_cache[pid] = (key, tracks)
     return tracks, meta
