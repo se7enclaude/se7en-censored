@@ -12,6 +12,8 @@ Version installée (recommandée) : installez-la depuis Seventh OS, ou lancez se
 Utilisation :
 1. Glissez une vidéo, choisissez-la, ou collez son chemin ou un lien.
 2. L'analyse passe sur toutes les images (vous pouvez l'arrêter et la reprendre plus tard).
+   Une 2e passe revoit ensuite les moments où l'IA a vu de la nudité : elle écarte ce qui n'en est pas
+   (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan.
 3. Vérifiez : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,
    "Zone qui suit" ou "Zone fixe" floute ce que l'IA a raté. Réglez la sensibilité, la marge et l'effet.
 4. "Exporter la vidéo floutée" : le fichier "<nom> (censuré)" est dans Vidéos\se7en Censored,

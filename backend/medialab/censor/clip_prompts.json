@@ -1,0 +1,13 @@
+{
+ "nude": ["a photo of a naked woman's bare breasts", "a close-up photo of bare female breasts with nipples",
+          "a photo of a topless woman", "a photo of a naked person's genitals", "a close-up photo of a penis",
+          "a close-up photo of a vulva", "a photo of bare naked buttocks", "a photo of a naked body", "explicit nudity"],
+ "male_chest": ["a photo of a shirtless man's chest", "a close-up photo of a man's bare chest and pectoral muscles",
+                "a photo of a shirtless man", "a man's nipple on a hairy chest"],
+ "covered": ["a photo of a woman wearing a bikini top", "a photo of a woman wearing a bra", "a photo of a clothed person",
+             "a photo of a woman in a dress", "a photo of underwear", "a photo of a person wearing a t-shirt"],
+ "other": ["a photo of a drinking glass", "a photo of a bottle", "a photo of a person's arm", "a photo of an elbow",
+           "a photo of a hand", "a photo of a face", "a photo of a knee", "a photo of a shoulder", "a photo of a belly",
+           "a photo of a foot", "a photo of an object", "a photo of a room", "a photo of food", "a photo of a lamp",
+           "a dark blurry photo", "a photo of hair", "a photo of a back"]
+}

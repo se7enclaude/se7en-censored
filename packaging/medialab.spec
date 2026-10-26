@@ -25,6 +25,7 @@ hidden = (
        "onnxruntime", "pillow_heif"]
 )
 datas = [(str(DIST_UI), "frontend/dist")]
+datas += [(str(BACKEND / "medialab" / "censor" / "clip_text.npz"), "medialab/censor")]  # 2e vérification (CLIP)
 datas += collect_data_files("webview")
 datas += collect_data_files("yt_dlp_ejs")
 datas += collect_data_files("certifi")

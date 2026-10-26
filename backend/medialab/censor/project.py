@@ -22,8 +22,9 @@ DEFAULT_OPTIONS = {
     "style": "blur", "shape": "ellipse", "strength": 70,
     "quality": "full",   # full : toutes les images ; fast : une sur deux
     "careful": False,    # analyse aussi l'image retournée (plus sûr, deux fois plus long)
+    "verify": True,      # 2e vérification (CLIP) : les zones jugées non nues ne sont pas floutées
 }
-EDITABLE = {"classes", "sensitivity", "margin", "style", "shape", "strength", "quality", "careful"}
+EDITABLE = {"classes", "sensitivity", "margin", "style", "shape", "strength", "quality", "careful", "verify"}
 
 
 def root() -> Path:

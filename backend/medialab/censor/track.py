@@ -40,6 +40,13 @@ def threshold(sensitivity: int) -> float:
     return round(0.55 - 0.40 * s / 100, 4)
 
 
+def verify_threshold(sensitivity: int) -> float:
+    """Note minimale de la 2e vérification (verify.py) : 0,2 par défaut (65), 0,3 très strict (0), 0,1 (100)."""
+    s = max(0, min(100, int(sensitivity)))
+    v = 0.2 + 0.1 * (65 - s) / 65 if s <= 65 else 0.2 - 0.1 * (s - 65) / 35
+    return round(v, 4)
+
+
 @dataclass
 class Params:
     classes: list[str] = field(default_factory=lambda: list(DEFAULT_CLASSES))
@@ -54,6 +61,7 @@ class Params:
     male_ratio: float = 0.8        # « poitrine » doublée d'un torse masculin presque aussi sûr : c'est un torse
     male_share: float = 0.5        # … sur plus de la moitié de ses images : la zone est écartée
     scene_s: float = 1.0           # zone moins sûre gardée si une nudité confirmée est à l'écran à 1 s près
+    verify: bool = True            # 2e vérification (si la vidéo l'a eue) : zone jugée non nue par CLIP écartée
 
     @classmethod
     def from_options(cls, o: dict) -> "Params":
@@ -64,6 +72,8 @@ class Params:
             p.sensitivity = int(o["sensitivity"])
         if o.get("margin") is not None:
             p.margin = max(0.0, min(1.0, float(o["margin"])))
+        if o.get("verify") is not None:
+            p.verify = bool(o["verify"])
         return p
 
 
@@ -153,15 +163,20 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
     tr = np.asarray(det["t"]) if "t" in det and len(det["t"]) == len(f) else np.zeros(len(f), np.int8)
     if not len(f):
         return []
+    # 2e passe (refine.py) : note de vérification (NaN : pas vérifiée) et changements de plan
+    ver = np.asarray(det["v"], np.float32) if "v" in det and len(det["v"]) == len(f) else np.full(len(f), np.nan)
+    cuts = np.asarray(det.get("cuts", []), np.int64)
+    vmin = verify_threshold(p.sensitivity) if p.verify else -1.0
     # tr = 1 : position suivie à l'image (detect.Watch), pas vue par le détecteur : ne sert qu'à prolonger une zone
     b = b.astype(np.float32).reshape(-1, 4)
     male = _male_lookalike(f, c, s.astype(np.float32), b, tr, p.male_ratio)
     keep = np.isin(c, list(wanted)) & ((s >= low) | (tr == 1))
-    f, c, s, b, tr, male = f[keep], c[keep], s[keep].astype(np.float32), b[keep], tr[keep], male[keep]
+    f, c, s, b, tr, male, ver = f[keep], c[keep], s[keep].astype(np.float32), b[keep], tr[keep], male[keep], ver[keep]
     order = np.lexsort((-s, tr, f))  # par image, les vraies détections d'abord, les plus confiantes en premier
-    f, c, s, b, tr, male = f[order], c[order], s[order], b[order], tr[order], male[order]
+    f, c, s, b, tr, male, ver = f[order], c[order], s[order], b[order], tr[order], male[order], ver[order]
+    shot = np.searchsorted(cuts, f, side="right")  # n° du plan de chaque détection
 
-    raw: list[dict] = []  # pistes en construction : {cls, obs: [(f, box, score, suivie, torse)]}
+    raw: list[dict] = []  # pistes en construction : {cls, plan, obs: [(f, box, score, suivie, torse, note)]}
     open_by_cls: dict[int, list[dict]] = {}
     i = 0
     n = len(f)
@@ -172,7 +187,8 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
         frame = int(f[i])
         for cls in np.unique(c[i:j]):
             idx = [k for k in range(i, j) if c[k] == cls]
-            live = [t for t in open_by_cls.get(int(cls), []) if frame - t["obs"][-1][0] <= gap]
+            live = [t for t in open_by_cls.get(int(cls), [])
+                    if frame - t["obs"][-1][0] <= gap and t["shot"] == shot[i]]  # jamais d'un plan à l'autre
             open_by_cls[int(cls)] = live
             used: set[int] = set()
             for k in idx:  # plus confiantes d'abord
@@ -186,12 +202,13 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
                 if best is None:
                     if tr[k] or s[k] < thr:
                         continue  # trop incertain (ou seulement suivi) pour ouvrir une nouvelle zone
-                    t = {"cls": int(cls), "obs": [(frame, b[k], float(s[k]), False, bool(male[k]))]}
+                    t = {"cls": int(cls), "shot": int(shot[i]),
+                         "obs": [(frame, b[k], float(s[k]), False, bool(male[k]), float(ver[k]))]}
                     raw.append(t)
                     live.append(t)
                     used.add(len(live) - 1)
                 else:
-                    live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k]), bool(male[k])))
+                    live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k]), bool(male[k]), float(ver[k])))
                     used.add(best)
         i = j
 
@@ -208,6 +225,9 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
         scores = np.array([o[2] for o in real])
         if sum(o[4] for o in real) > p.male_share * len(real):
             continue  # torse d'homme (pecs) pris pour une poitrine
+        notes = [o[5] for o in real if not np.isnan(o[5])]
+        if notes and float(np.mean(notes)) < vmin:
+            continue  # la 2e vérification la juge non nue
         if int((scores >= thr).sum()) >= need and float(scores.mean()) >= thr:
             sure.append(t)
         elif len(real) >= 2 or float(scores.max()) >= thr + 0.15:
@@ -226,7 +246,9 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
         grid = np.arange(a, z + 1)
         boxes = np.stack([np.interp(grid, fs, bs[:, j]) for j in range(4)], 1)
         boxes = _smooth(boxes, p.smooth)
-        a2, z2 = max(0, a - pad), min(max(frames - 1, z), z + pad)
+        first = int(cuts[t["shot"] - 1]) if t["shot"] > 0 else 0  # marges avant / après : dans le même plan
+        last = int(cuts[t["shot"]]) - 1 if t["shot"] < len(cuts) else max(frames - 1, z)
+        a2, z2 = max(0, first, a - pad), min(max(frames - 1, z), last, z + pad)
         boxes = np.concatenate([np.repeat(boxes[:1], a - a2, 0), boxes, np.repeat(boxes[-1:], z2 - z, 0)])
         boxes = _expand(boxes, p.margin)
         tracks.append(Track(f"{LABELS[t['cls']]}-{a}-{len(tracks)}", LABELS[t["cls"]], a2, z2, boxes, top, len(real)))

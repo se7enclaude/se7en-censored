@@ -23,6 +23,7 @@ interface Options {
   strength: number;
   quality: "full" | "fast";
   careful: boolean;
+  verify?: boolean; // 2e vérification (CLIP) des zones trouvées
 }
 
 interface Project {
@@ -39,7 +40,7 @@ interface Project {
   hidden: { cls: string; f0: number; f1: number }[];
   export: { file: string; size: number; seconds: number; blurred_frames: number } | null;
   stats: { zones?: number; seconds?: number; analysis_seconds?: number };
-  detect?: { v?: number; fps: number; frames: number; seconds: number; gpu: boolean };
+  detect?: { v?: number; fps: number; frames: number; seconds: number; gpu: boolean; refined?: number };
 }
 
 interface Summary {
@@ -78,6 +79,8 @@ interface Zones {
   tracks: Track[];
   manual: Manual[];
   hidden: { cls: string; f0: number; f1: number }[];
+  cuts: number[]; // premières images des nouveaux plans (2e passe)
+  refined: boolean;
   stats: { zones: number; seconds: number };
 }
 
@@ -359,7 +362,7 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
       {analyzing && (
         <div className="card card-pad rise clip-run">
           <div className="clip-steps">
-            {[...(p.source.url ? [{ id: "download", label: "Téléchargement" }] : []), { id: "detect", label: "Analyse des images" }, { id: "review", label: "Vérification" }].map((s, k, all) => {
+            {[...(p.source.url ? [{ id: "download", label: "Téléchargement" }] : []), { id: "detect", label: "Analyse des images" }, { id: "verify", label: "2e passe" }, { id: "review", label: "Vérification" }].map((s, k, all) => {
               const cur = all.findIndex((x) => x.id === (p.step || "detect"));
               return (
                 <div key={s.id} className={clsx("clip-step", k < cur && "done", k === cur && "on")}>
@@ -386,6 +389,12 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Analysé avec une version précédente : relancez l'analyse pour profiter du suivi visuel des zones (moins de trous dans le flou). Vos zones à la main sont gardées.</span>
           <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Réanalyser</Button>
+        </div>
+      )}
+      {reviewable && p.detect && (p.detect.v ?? 1) >= 2 && !p.detect.refined && (
+        <div className="clip-hint" style={{ marginBottom: 12 }}>
+          <span>Nouveau : la 2e passe revoit les moments où l'IA a vu de la nudité. Elle écarte ce qui n'en est pas (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan. Quelques minutes, sans refaire l'analyse ; vos zones à la main sont gardées.</span>
+          <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Lancer la 2e passe</Button>
         </div>
       )}
       {p.notes?.map((n) => (
@@ -535,10 +544,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       setSelected(id);
     } else if (mode === "fixed") {
       const id = Math.random().toString(36).slice(2, 10);
-      const end = Math.min(total - 1, frame + Math.round(FIXED_S * fps));
+      const nextCut = z.cuts?.find((c) => c > frame);
+      const end = Math.min(total - 1, frame + Math.round(FIXED_S * fps), nextCut != null ? nextCut - 1 : total);
       saveManual([...p.manual, { id, fixed: true, keys: [{ f: frame, box }, { f: end, box }] }]);
       setSelected(id);
-      toast({ kind: "info", title: `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avancez jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.", timeout: 3500 });
+      const atCut = nextCut != null && end === nextCut - 1;
+      toast({ kind: "info", title: atCut ? `Zone fixe posée pour ${((end - frame + 1) / fps).toFixed(1).replace(".", ",")} s, jusqu'au changement de plan` : `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avancez jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.", timeout: 3500 });
     } else if (mode === "key" && sel?.fixed) {
       // zone fixe : le nouveau cadre vaut de cette image jusqu'à sa fin, sans suivi
       const keep = sel.keys.filter((k) => k.f < frame);
@@ -560,7 +571,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       const secs = (r.keys[r.keys.length - 1].f - f) / fps;
       toast({
         kind: "info",
-        title: r.reason === "flat" ? "Zone sans détail : posée pour 2 s" : `Zone suivie sur ${secs.toFixed(1).replace(".", ",")} s`,
+        title: r.reason === "flat" ? "Zone sans détail : posée pour 2 s" : `Zone suivie sur ${secs.toFixed(1).replace(".", ",")} s${r.reason === "cut" ? ", jusqu'au changement de plan" : ""}`,
         body: r.reason === "lost" ? "Elle a été perdue ensuite (changement de plan ou sortie du cadre) : « Finir ici » ou « Recadrer » pour ajuster." : r.reason === "limit" ? "Allez plus loin et « Recadrer » pour continuer le suivi." : undefined,
         timeout: 3500,
       });
@@ -738,6 +749,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
             })}
           </div>
           <Range label="Sensibilité" left="Strict" right="Au moindre doute" value={opts.sensitivity} min={0} max={100} onChange={(v) => setOpt("sensitivity", v)} />
+          {z.refined && (
+            <label className="row clip-check" style={{ marginTop: 10 }} data-tip="Une 2e IA (CLIP) revoit chaque zone : celles qu'elle juge non nues (pecs, verre, bras…) ne sont pas floutées">
+              <Switch checked={opts.verify !== false} onChange={(v) => setOpt("verify", v)} />
+              <span>2e vérification</span>
+            </label>
+          )}
           <Range label="Marge autour" left="Serrée" right="Large" value={Math.round(opts.margin * 100)} min={0} max={60} onChange={(v) => setOpt("margin", v / 100)} />
           <div className="label" style={{ marginTop: 14 }}>Effet</div>
           <Segmented full size="sm" value={opts.style} onChange={(v) => setOpt("style", v)} options={[{ value: "blur", label: "Flou" }, { value: "pixel", label: "Pixels" }, { value: "black", label: "Noir" }]} />

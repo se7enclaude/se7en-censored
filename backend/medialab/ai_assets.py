@@ -107,6 +107,11 @@ ASSETS: dict[str, Asset] = {a.id: a for a in [
           "https://github.com/se7enclaude/se7en-censored/releases/download/models/nudenet_640m.onnx",
           "04fe3d77980780c1f8297dc6d7f942fd5b3abe6942a188f742a85241e4f634eb", 103538690, "nsfw",
           "AGPL-3.0", "notAI-tech (NudeNet v3.4, détecteur 640m)"),
+    # ---- se7en Censored : 2e vérification (CLIP ViT-B/32, partie image, conversion ONNX de Xenova)
+    Asset("clip_vit_b32", "clip_vit_b32_vision.onnx",
+          "https://github.com/se7enclaude/se7en-censored/releases/download/models/clip_vit_b32_vision.onnx",
+          "fd6e1402a588279d1723c7534d4bcba5bc0b14b47dfab0e46f8c47b8270d7d4", 351685709, "nsfw",
+          "MIT", "OpenAI (CLIP ViT-B/32), conversion ONNX Xenova"),
 ]}
 
 _lock = threading.Lock()

@@ -11,7 +11,7 @@ import numpy as np
 from ..errors import MediaLabError
 from ..logging_setup import get_logger
 from ..media import ffmpeg
-from . import detect, render
+from . import detect, refine, render
 from . import project as P
 from . import track as T
 
@@ -89,15 +89,26 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
     P.patch(pid, {"video": video, "step": "detect", "notes": notes, "thumb": str(thumb) if thumb.exists() else None})
     lo = 0.15 if has_url else 0.0
     device = "cpu" if getattr(settings.ai, "gpu_id", "auto") == "cpu" else "auto"
+    mid = lo + (1 - lo) * 0.9  # l'analyse, puis la 2e passe (courte : seulement autour de la nudité trouvée)
     det, meta = detect.analyze(src, video, cache, step=2 if opts.get("quality") == "fast" else 1,
                                mirror=bool(opts.get("careful")), device=device, cancel=cancel,
-                               progress=lambda f, lbl, eta: progress(lo + (1 - lo) * f, lbl, eta))
+                               progress=lambda f, lbl, eta: progress(lo + (mid - lo) * f, lbl, eta))
+    if meta.get("refined") != refine.REFINE_VERSION:
+        P.patch(pid, {"step": "verify"})
+        try:
+            det, meta = refine.run(src, video, cache, det, meta, device=device, cancel=cancel,
+                                   progress=lambda f, lbl, eta: progress(mid + (1 - mid) * f, lbl, eta))
+        except MediaLabError as e:  # l'analyse reste utilisable sans la 2e passe (relançable plus tard)
+            log.warning("Second pass failed: %s", e)
+            notes.append(f"La 2e passe n'a pas pu se faire ({e.message}) : les zones viennent de la seule analyse. "
+                         "Relancez-la plus tard depuis ce projet.")
+            P.patch(pid, {"notes": notes})
     with _zones_lock:
         _zones_cache.pop(pid, None)
     project = P.load(pid)
     stats = summary(project)
     project = P.patch(pid, {"status": "review", "step": None, "detect": {k: meta.get(k) for k in
-                                                                         ("v", "fps", "frames", "step", "mirror", "seconds", "gpu")},
+                                                                         ("v", "fps", "frames", "step", "mirror", "seconds", "gpu", "refined")},
                             "stats": stats})
     progress(1.0, "Analyse terminée", 0)
     return project
@@ -111,9 +122,10 @@ def zones(project: dict) -> tuple[list[T.Track], dict]:
     if not loaded or not loaded[1].get("done"):
         raise MediaLabError("not_analyzed", "Cette vidéo n'est pas encore analysée.")
     det, meta = loaded
+    meta = {**meta, "cuts": [int(x) for x in det.get("cuts", [])]}  # changements de plan (2e passe)
     params = T.Params.from_options(project["options"])
     npz = cache / "detections.npz"
-    key = (npz.stat().st_mtime, tuple(params.classes), params.sensitivity, params.margin)
+    key = (npz.stat().st_mtime, tuple(params.classes), params.sensitivity, params.margin, params.verify)
     with _zones_lock:
         hit = _zones_cache.get(pid)
         if hit and hit[0] == key:
@@ -165,13 +177,14 @@ def follow_zone(project: dict, f: int, box: list[float], seconds: float = 10.0) 
     video = project["video"]
     loaded = detect.load(P.cache_dir(project["id"]))
     meta = loaded[1] if loaded else {}
+    cuts = {int(x) for x in loaded[0].get("cuts", [])} if loaded else set()
     fps = float(meta.get("fps") or video.get("fps") or 25.0)
     frames = int(meta.get("frames") or round(float(video.get("duration") or 0) * fps))
     size = FR.analysis_size(int(video["width"]), int(video["height"]), detect.SIDE)
     f = max(0, min(frames - 1, int(f)))
     box = [float(np.clip(v, 0, 1)) for v in box]
     keys = [{"f": f, "box": box}]
-    last = min(frames - 1, f + int(round(seconds * fps)))
+    last = min(frames - 1, f + int(round(seconds * fps)), min((x - 1 for x in cuts if x > f), default=frames))
     reader = FR.Reader(src, fps, size, "rgb24", start=f)
     reason = "end"
     try:
@@ -197,7 +210,7 @@ def follow_zone(project: dict, f: int, box: list[float], seconds: float = 10.0) 
         if keys[-1]["f"] != i and i > f:
             keys.append({"f": i, "box": [round(float(v), 4) for v in fw.box]})
         if i >= last and reason != "lost":
-            reason = "limit"
+            reason = "cut" if last + 1 in cuts else "limit"
     finally:
         reader.close()
     return {"keys": keys, "until": keys[-1]["f"], "reason": reason, "seconds": round((keys[-1]["f"] - f) / fps, 2)}

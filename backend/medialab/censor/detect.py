@@ -193,7 +193,18 @@ def load(cache: Path) -> tuple[dict, dict] | None:
     with np.load(npz) as z:
         det = {k: z[k] for k in ("f", "c", "s", "b")}
         det["t"] = z["t"] if "t" in z.files else np.zeros(len(det["f"]), np.int8)
+        if "v" in z.files:  # 2e passe (refine.py) : note de vérification, changements de plan
+            det["v"] = z["v"]
+            det["cuts"] = z["cuts"]
     return det, m
+
+
+def save_arrays(cache: Path, det: dict, meta: dict) -> None:
+    npz, mf = _store(cache)
+    tmp = npz.with_name("detections.tmp.npz")
+    np.savez_compressed(tmp, **det)
+    tmp.replace(npz)
+    mf.write_text(json.dumps(meta), "utf-8")
 
 
 def _save(cache: Path, rows: list, meta: dict) -> None:

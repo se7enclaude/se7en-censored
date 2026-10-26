@@ -36,6 +36,7 @@ class OptionsBody(BaseModel):
     strength: int | None = None
     quality: str | None = None
     careful: bool | None = None
+    verify: bool | None = None
 
 
 class ManualBody(BaseModel):
@@ -180,8 +181,8 @@ def register(app: FastAPI, S) -> None:
             hidden = project.get("hidden") or []
             return {"fps": meta["fps"], "frames": meta["frames"],
                     "tracks": [{**t.to_dict(), "hidden": T.hidden_match(t, hidden)} for t in tracks],
-                    "manual": project.get("manual") or [], "hidden": hidden,
-                    "stats": _cov(project)}
+                    "manual": project.get("manual") or [], "hidden": hidden, "cuts": meta.get("cuts", []),
+                    "refined": bool(meta.get("refined")), "stats": _cov(project)}
         return await run_in_threadpool(run)
 
     @app.put("/api/censor/projects/{pid}/manual")

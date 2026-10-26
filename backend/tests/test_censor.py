@@ -299,3 +299,94 @@ def test_fixed_manual_zone_is_kept_as_drawn(tmp_path):
     assert T.manual_box(saved[0], 35).tolist() == pytest.approx(box)   # même cadre du début à la fin
     assert saved[0]["keys"][-1]["f"] == 60
     P.delete(p["id"])
+
+
+# ------------------------------------------------------------------ 2e passe : vérification, plans, tuiles
+def test_verify_threshold_follows_sensitivity():
+    assert T.verify_threshold(65) == 0.2 and T.verify_threshold(0) == 0.3 and T.verify_threshold(100) == 0.1
+
+
+def test_zone_judged_not_nude_is_dropped():
+    rows = moving(0, 30, score=0.7)
+    d = det(rows)
+    d["v"] = np.full(len(rows), 0.08, np.float16)          # CLIP : un torse, un verre…
+    assert T.build(d, 25.0, 100, T.Params()) == []
+    assert len(T.build(d, 25.0, 100, T.Params(verify=False))) == 1   # vérification coupée : floutée
+    d["v"][:] = 0.45                                        # CLIP : nudité
+    assert len(T.build(d, 25.0, 100, T.Params())) == 1
+    d["v"][:] = np.nan                                      # pas vérifiée (ancienne analyse) : comme avant
+    assert len(T.build(d, 25.0, 100, T.Params())) == 1
+
+
+def test_zone_never_crosses_a_shot_change():
+    d = det(moving(0, 60, score=0.7, dx=0))
+    d["v"] = np.full(61, np.nan, np.float16)
+    d["cuts"] = np.array([30], np.int32)
+    tracks = T.build(d, 25.0, 100, T.Params(pad_s=0.4, smooth=1))
+    assert [(t.f0, t.f1) for t in tracks] == [(0, 29), (30, 60 + 10)]  # marges coupées au plan, pas au-delà
+
+
+def test_second_pass_plan_and_tiles():
+    from medialab.censor import refine as R
+    d = det([(100, BREAST, 0.5, [0.1, 0.1, 0.2, 0.2]), (101, BREAST, 0.1, [0.1, 0.1, 0.2, 0.2])])
+    d["t"] = np.zeros(2, np.int8)
+    fine, segs = R.plan(d, 1000, 25.0)
+    assert fine[100 - 12] and fine[100 + 12] and not fine[100 + 14]   # tuiles ±0,5 s
+    assert segs == [(50, 150)]                                         # plans cherchés ±2 s
+    t = R.tiles(960, 400)
+    assert t == [(0, 0, 640, 400), (320, 0, 960, 400)]                 # deux tuiles qui se chevauchent de moitié
+    assert R.tiles(640, 360) == [(0, 0, 640, 360)]
+    assert len(R.tiles(960, 720)) == 4
+
+
+def test_shot_change_detector():
+    from medialab.censor import refine as R
+    yy, xx = np.mgrid[0:120, 0:160]
+
+    def scene(shift, phase):  # image lisse (comme un vrai plan) qui glisse de ``shift`` px
+        g = 127 + 100 * np.sin((xx + shift) / 9 + phase) * np.cos(yy / 13)
+        return np.repeat(g[..., None], 3, 2).astype(np.uint8)
+    cuts = R.Cuts()
+    seq = [scene(2 * k, 0.0) for k in range(10)] + [255 - scene(40, 1.0) // 2 for _ in range(5)]  # autre plan
+    hits = [k for k, im in enumerate(seq) if cuts.step(im)]
+    assert hits == [10]                                                # le mouvement n'est pas un changement de plan
+
+
+@pytest.mark.ffmpeg
+def test_second_pass_on_a_real_video(tmp_path, ffmpeg_bin, monkeypatch):
+    """2e passe complète (détecteur et CLIP remplacés) : tuiles fusionnées, notes, changement de plan, sauvegarde."""
+    import subprocess
+    import threading
+    from medialab.censor import detect as D, refine as R, verify as V
+    src = tmp_path / "cut.mp4"
+    subprocess.run([ffmpeg_bin, "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x266:r=25:d=2",
+                    "-f", "lavfi", "-i", "color=c=navy:s=640x266:r=25:d=2", "-filter_complex", "[0][1]concat=n=2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+
+    class FakeDetector:
+        def __init__(self, *a, **k): pass
+        def run(self, rgb, mirror=False):
+            return [(BREAST, 0.6, [0.4, 0.4, 0.6, 0.6])]               # au milieu de chaque tuile
+
+    class FakeVerifier:
+        def __init__(self, *a, **k): pass
+        def frame(self, rgb, boxes):
+            return [0.05 for _ in boxes]                               # rien de nu
+
+    monkeypatch.setattr(D, "Detector", FakeDetector)
+    monkeypatch.setattr(V, "Verifier", FakeVerifier)
+    rows = [(f, BREAST, 0.6, [0.45, 0.4, 0.55, 0.6]) for f in range(10, 40)]
+    d = det(rows)
+    d["t"] = np.zeros(len(rows), np.int8)
+    meta = {"v": D.DETECT_VERSION, "fps": 25.0, "frames": 100, "step": 1, "done": True}
+    cache = tmp_path / "c"
+    cache.mkdir()
+    out, meta2 = R.run(src, {"width": 640, "height": 266}, cache, d, meta, cancel=threading.Event(),
+                       progress=lambda *a: None)
+    assert meta2["refined"] == R.REFINE_VERSION
+    assert 50 in out["cuts"].tolist()                                  # le plan change à 2 s
+    assert np.isfinite(out["v"].astype(np.float32)).sum() > 0
+    loaded, m = D.load(cache)
+    assert m["refined"] == R.REFINE_VERSION and len(loaded["v"]) == len(loaded["f"])
+    assert T.build(loaded, 25.0, 100, T.Params()) == []                # jugé non nu : rien à flouter
+    assert len(T.build(loaded, 25.0, 100, T.Params(verify=False))) >= 1
