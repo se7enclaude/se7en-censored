@@ -185,3 +185,25 @@ def preview(src: Path, video: dict, fps: float, index: int, boxes: list[np.ndarr
     buf = io.BytesIO()
     Image.fromarray(frame).save(buf, "JPEG", quality=88)
     return buf.getvalue()
+
+
+def sample(src: Path, video: dict, fps: float, index: int, boxes: list[np.ndarray], *, style: str, shape: str,
+           strength: int, max_w: int = 1920, side: int = 360) -> bytes:
+    """Gros plan sur la plus grande zone de l'image, floutée comme à l'export : l'aperçu du niveau de flou."""
+    w, h = int(video["width"]), int(video["height"])
+    if w > max_w:
+        w, h = max_w, h * max_w / w
+    frame = FR.grab(src, fps, index, (FR.even(w), FR.even(h)))
+    fh, fw = frame.shape[:2]
+    if boxes:
+        effects.apply(effects.rgb_planes(frame), boxes, style, shape, strength)
+        b = max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+        cx, cy = (b[0] + b[2]) / 2 * fw, (b[1] + b[3]) / 2 * fh
+        half = max((b[2] - b[0]) * fw, (b[3] - b[1]) * fh, 32) * 0.9  # la zone et un peu d'entourage
+        x0, y0 = int(max(0, min(fw - 2 * half, cx - half))), int(max(0, min(fh - 2 * half, cy - half)))
+        frame = frame[y0:int(y0 + 2 * half), x0:int(x0 + 2 * half)]
+    img = Image.fromarray(frame)
+    img.thumbnail((side, side), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    return buf.getvalue()

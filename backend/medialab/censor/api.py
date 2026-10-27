@@ -237,8 +237,9 @@ def register(app: FastAPI, S) -> None:
         return await run_in_threadpool(run)
 
     @app.get("/api/censor/projects/{pid}/frame")
-    async def frame(pid: str, f: int = 0, blur: bool = True):
-        """Une image de la vidéo (n° ``f``), floutée comme à l'export ou telle quelle."""
+    async def frame(pid: str, f: int = 0, blur: bool = True, zoom: bool = False):
+        """Une image de la vidéo (n° ``f``), floutée comme à l'export ou telle quelle ; ``zoom`` : gros plan sur sa
+        plus grande zone (aperçu du niveau de flou)."""
         def run():
             project = P.load(pid)
             src = pipeline.source_path(project)
@@ -246,6 +247,9 @@ def register(app: FastAPI, S) -> None:
             fb = T.FrameBoxes(tracks, project.get("manual") or [], project.get("hidden") or [])
             idx = max(0, min(int(meta["frames"]) - 1, int(f)))
             o = project["options"]
+            if zoom:
+                return render.sample(src, project["video"], float(meta["fps"]), idx, fb.at(idx), style=o["style"],
+                                     shape=o["shape"], strength=int(o["strength"]))
             return render.preview(src, project["video"], float(meta["fps"]), idx, fb.at(idx), style=o["style"],
                                   shape=o["shape"], strength=int(o["strength"]), blur=blur)
         data = await run_in_threadpool(run)

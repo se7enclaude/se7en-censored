@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter
 STYLES = ("blur", "pixel", "black")
 SHAPES = ("ellipse", "rect")
 ELLIPSE_GROW = 1.18  # l'ellipse déborde un peu de la boîte : les coins de la zone restent couverts
+BLUR_CELLS = (20.0, 4.0)  # flou : détails gardés sur le grand côté de la zone, intensité 0 (léger) à 100 (fort)
 
 
 @lru_cache(maxsize=256)
@@ -37,10 +38,13 @@ def _effect(region: np.ndarray, style: str, strength: int, fill: int | tuple) ->
         k = max(w, h) / blocks
         small = img.resize((max(1, round(w / k)), max(1, round(h / k))), Image.BOX)
         return np.asarray(small.resize((w, h), Image.NEAREST))
-    # flou très fort et rapide : réduction puis agrandissement, puis flou gaussien pour lisser
-    k = 4 + 12 * s
+    # flou très fort et rapide : réduction puis agrandissement, puis flou gaussien pour lisser. Tout est relatif à la
+    # taille de la zone : le flou est le même dans l'aperçu (image réduite) et à l'export (4K). Réglée en pixels,
+    # l'intensité ne changeait presque rien sur une zone de 4K.
+    cells = BLUR_CELLS[0] + (BLUR_CELLS[1] - BLUR_CELLS[0]) * s  # détails gardés sur le grand côté
+    k = max(1.0, max(w, h) / cells)
     small = img.resize((max(1, round(w / k)), max(1, round(h / k))), Image.BOX)
-    out = small.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(max(1.5, max(w, h) / 30)))
+    out = small.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(max(1.5, 0.6 * k)))
     return np.asarray(out)
 
 

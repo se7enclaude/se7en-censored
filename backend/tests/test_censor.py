@@ -3,6 +3,7 @@ import threading
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from medialab.censor import effects, frames as FR, render
 from medialab.censor import project as P
@@ -145,6 +146,43 @@ def test_blur_hides_detail():
     out = img.copy()
     effects.apply(effects.rgb_planes(out), [np.array([0, 0, 1, 1], np.float32)], "blur", "rect", 70)
     assert out[50:150, 50:150].std() < 12
+
+
+def test_blur_looks_the_same_in_preview_and_4k():
+    """Le flou dépend de la taille de la zone, pas des pixels : l'aperçu (réduit) montre ce que donnera l'export 4K,
+    et l'intensité agit aussi en 4K (réglée en pixels, elle n'y changeait presque rien)."""
+    yy, xx = np.mgrid[0:1200, 0:1200]
+    big = np.repeat(((np.sin(xx / 40.0) * np.cos(yy / 55.0) + 1) * 127).astype(np.uint8)[..., None], 3, 2)
+    small = np.asarray(Image.fromarray(big).resize((400, 400), Image.BOX))
+    box = [np.array([0, 0, 1, 1], np.float32)]
+    for strength in (0, 70, 100):
+        b, s = big.copy(), small.copy()
+        effects.apply(effects.rgb_planes(b), box, "blur", "rect", strength)
+        effects.apply(effects.rgb_planes(s), box, "blur", "rect", strength)
+        b_small = np.asarray(Image.fromarray(b).resize((400, 400), Image.BOX)).astype(int)
+        assert np.abs(b_small - s.astype(int)).mean() < 6, strength
+    weak, strong = big.copy(), big.copy()
+    effects.apply(effects.rgb_planes(weak), box, "blur", "rect", 0)
+    effects.apply(effects.rgb_planes(strong), box, "blur", "rect", 100)
+    assert strong.std() < weak.std() * 0.6  # « Fort » efface bien plus que « Léger »
+
+
+@pytest.mark.ffmpeg
+def test_zoomed_sample_shows_the_zone(tmp_path, ffmpeg_bin):
+    import io as _io
+    import subprocess
+    src = tmp_path / "src.mp4"
+    subprocess.run([ffmpeg_bin, "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=25:d=1", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", str(src)], check=True)
+    video = P.video_info(src)
+    box = np.array([0.4, 0.4, 0.6, 0.7], np.float32)
+    jpg = render.sample(src, video, 25.0, 5, [box], style="black", shape="rect", strength=70)
+    img = np.asarray(Image.open(_io.BytesIO(jpg)).convert("RGB"))
+    assert max(img.shape[:2]) <= 360 and img.shape[0] > 50
+    h, w = img.shape[:2]
+    assert img[h // 2 - 5:h // 2 + 5, w // 2 - 5:w // 2 + 5].mean() < 25  # la zone (noire) est au centre du gros plan
+    plain = render.sample(src, video, 25.0, 5, [], style="black", shape="rect", strength=70)
+    assert Image.open(_io.BytesIO(plain)).width == 360  # sans zone : l'image entière en petit
 
 
 def test_effect_on_yuv_planes_and_edges():

@@ -477,6 +477,29 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     return () => clearTimeout(t);
   }, [frame, playing, preview, canPlay, p.id, optsKey]);
 
+  // gros plan flouté d'une zone, à côté de l'intensité : la zone de l'image en cours, sinon la plus longue
+  const [sample, setSample] = useState<{ f: number; url: string } | null>(null);
+  const fxKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden]);
+  useEffect(() => {
+    if (playing) return;
+    let f: number | null = null;
+    if (z.tracks.some((t) => !t.hidden && t.f0 <= frame && frame <= t.f1) || p.manual.some((m) => manualAt(m, frame))) f = frame;
+    else if (sample && sample.f !== frame && (visible.some((t) => t.f0 <= sample.f && sample.f <= t.f1) || p.manual.some((m) => manualAt(m, sample.f)))) f = sample.f;
+    else {
+      const t = [...visible].sort((a, b) => b.f1 - b.f0 - (a.f1 - a.f0))[0];
+      const m = p.manual[0];
+      f = t ? (t.f0 + t.f1) >> 1 : m ? (m.keys[0].f + m.keys[m.keys.length - 1].f) >> 1 : null;
+    }
+    if (f == null) {
+      setSample(null);
+      return;
+    }
+    const at = f;
+    const h = setTimeout(() => setSample({ f: at, url: mediaUrl(`/api/censor/projects/${p.id}/frame?f=${at}&zoom=1&k=${encodeURIComponent(fxKey)}`) }), 250);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame, playing, fxKey, visible, p.id]);
+
   const saveOpts = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const setOpt = <K extends keyof Options>(k: K, v: Options[K]) => {
     const next = { ...opts, [k]: v };
@@ -761,6 +784,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           <div style={{ height: 8 }} />
           <Segmented full size="sm" value={opts.shape} onChange={(v) => setOpt("shape", v)} options={[{ value: "ellipse", label: "Ovale" }, { value: "rect", label: "Rectangle" }]} />
           {opts.style !== "black" && <Range label="Intensité" left="Léger" right="Fort" value={opts.strength} min={0} max={100} onChange={(v) => setOpt("strength", v)} />}
+          {sample && (
+            <button className="cz-sample" onClick={() => seek(sample.f)} data-tip="Gros plan sur une zone, floutée exactement comme à l'export. Cliquez pour aller à ce moment.">
+              <img src={sample.url} alt="Aperçu du flou" draggable={false} />
+              <span>Aperçu du flou · {clock(sample.f / fps)}</span>
+            </button>
+          )}
         </div>
 
         <div className="card card-pad cz-list">

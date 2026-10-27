@@ -59,6 +59,9 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); cursor: pointer;
 }
 .cz-range-ends { font-size: 11px; }
+.cz-sample { display: block; width: 100%; margin-top: 12px; padding: 0; border: 1px solid var(--border-default); border-radius: 10px; overflow: hidden; background: #000; cursor: pointer; text-align: left; }
+.cz-sample img { display: block; width: 100%; height: auto; min-height: 120px; object-fit: contain; }
+.cz-sample span { display: block; padding: 6px 10px; font-size: 11px; color: var(--text-secondary); background: var(--surface-2); }
 
 .cz-list { max-height: 46vh; overflow: auto; }
 .cz-list .label { display: block; margin-bottom: 6px; }
