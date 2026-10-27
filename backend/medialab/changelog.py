@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.2.1": {
+        "fr": ["Export : le son ne disparaît plus. Il était bien dans la vidéo exportée, mais rangé loin devant "
+               "l'image, et beaucoup de lecteurs (télé, téléphone, ou après un saut) n'en avaient plus. Les pistes "
+               "son et sous-titres gardent aussi leurs réglages d'origine (plus de sous-titres imposés)."],
+        "en": ["Export: the sound no longer disappears. It was in the exported video but stored far ahead of the "
+               "picture, so many players (TV, phone, or after a jump) had none. Audio and subtitle tracks also keep "
+               "their original settings (no more forced subtitles)."],
+    },
     "1.2.0": {
         "fr": ["2e passe : après l'analyse, les moments où l'IA a vu de la nudité sont relus de plus près. Un 2e "
                "modèle (CLIP) vérifie chaque zone avant de la flouter : moins de fausses alertes (torses d'homme, "

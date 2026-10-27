@@ -1,13 +1,10 @@
-## se7en Censored 1.2.0
+## se7en Censored 1.2.1
 
-- **2e passe.** Après l'analyse, les moments où l'IA a vu de la nudité (quelques % de la vidéo) sont relus de plus
-  près : l'image est agrandie et lue en morceaux, et un 2e modèle (CLIP) vérifie chaque zone avant de la flouter.
-  Moins de fausses alertes (torses d'homme, objets), et les petites parties ou celles au loin sont mieux trouvées.
-- **Changements de plan.** Une zone ne déborde plus sur le plan suivant : ni celles de l'IA, ni tes zones qui suivent,
-  ni tes zones fixes.
-- **Projets déjà analysés :** un bouton « Lancer la 2e passe » suffit, sans refaire l'analyse. L'option
-  « 2e vérification » peut être coupée, et le curseur « Sensibilité » règle sa sévérité.
-- Le modèle de vérification (352 Mo) est téléchargé une seule fois, au premier usage.
+- **Le son ne disparaît plus à l'export.** Il était bien dans la vidéo exportée, mais rangé loin devant l'image dans
+  le fichier : beaucoup de lecteurs (télé, téléphone, ou après un saut dans la vidéo) n'avaient plus de son.
+  L'image floutée est maintenant encodée d'abord, puis le son et les sous-titres sont ajoutés au bon endroit.
+- Les pistes son et sous-titres gardent leurs réglages d'origine : plus de sous-titres anglais affichés d'office.
+- Un export fait avec une version précédente garde le défaut : exporte à nouveau pour en profiter.
 
 Tes projets et tes réglages sont gardés.
 
