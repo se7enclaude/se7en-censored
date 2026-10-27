@@ -2,6 +2,16 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.2.2": {
+        "fr": ["Flou plus fort : l'intensité agit vraiment, même en 4K. À 70 (par défaut) on ne distingue plus rien, "
+               "à 100 tout est effacé. Le flou est le même dans l'aperçu et à l'export.",
+               "Aperçu du flou : sous « Intensité », un gros plan d'une zone floutée exactement comme à l'export, mis "
+               "à jour quand tu changes les réglages. Un clic t'emmène à ce moment."],
+        "en": ["Stronger blur: the intensity really works, even in 4K. At 70 (default) nothing can be made out, at "
+               "100 everything is wiped. The blur looks the same in the preview and in the export.",
+               "Blur preview: under \"Intensity\", a close-up of a zone blurred exactly as in the export, updated "
+               "when you change the settings. Click it to go to that moment."],
+    },
     "1.2.1": {
         "fr": ["Export : le son ne disparaît plus. Il était bien dans la vidéo exportée, mais rangé loin devant "
                "l'image, et beaucoup de lecteurs (télé, téléphone, ou après un saut) n'en avaient plus. Les pistes "
