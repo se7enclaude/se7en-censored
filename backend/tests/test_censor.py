@@ -203,6 +203,46 @@ def test_export_blurs_frames_and_keeps_audio(tmp_path, ffmpeg_bin):
     assert a[cy - 10:cy + 10, cx - 10:cx + 10].mean() > 30                         # image 5 : pas de zone
 
 
+@pytest.mark.ffmpeg
+def test_export_mkv_keeps_tracks_and_interleaves_audio(tmp_path, ffmpeg_bin):
+    """MKV à deux pistes son + sous-titres : tout est gardé avec ses réglages, et le son reste à côté de l'image
+    dans le fichier (écrit en avance, les lecteurs n'avaient plus de son)."""
+    import json
+    import subprocess
+    from medialab.components import require
+    src = tmp_path / "src.mkv"
+    srt = tmp_path / "s.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nBonjour\n", encoding="utf-8")
+    subprocess.run([ffmpeg_bin, "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=160x120:r=25:d=40", "-f", "lavfi",
+                    "-i", "sine=f=440:d=40", "-f", "lavfi", "-i", "sine=f=660:d=40", "-i", str(srt),
+                    "-map", "0", "-map", "1", "-map", "2", "-map", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "ac3", "-c:s", "srt", "-metadata:s:a:1", "language=fre", "-disposition:a:0", "default",
+                    "-disposition:a:1", "0", "-disposition:s:0", "0", str(src)], check=True)
+    video = P.video_info(src)
+    dst = tmp_path / "out.mkv"
+    res = render.export(src, video, T.FrameBoxes([], []), 25.0, 1000, dst, style="blur", shape="rect", strength=70,
+                        cancel=threading.Event(), progress=lambda *a: None, use_gpu=False)
+    assert res["frames"] == 1000 and not list(tmp_path.glob("*.video.*")) and not list(tmp_path.glob("*.part.*"))
+    probe = require("ffprobe")
+    info = json.loads(subprocess.run([probe, "-v", "error", "-show_streams", "-of", "json", str(dst)],
+                                     capture_output=True, check=True).stdout)["streams"]
+    assert [s["codec_type"] for s in info] == ["video", "audio", "audio", "subtitle"]
+    assert [s["disposition"]["default"] for s in info] == [1, 1, 0, 0]
+    assert info[2]["tags"]["language"] == "fre"
+    out = subprocess.run([probe, "-v", "error", "-show_entries", "packet=stream_index,pts_time,pos", "-of", "csv=p=0",
+                          str(dst)], capture_output=True, text=True, check=True).stdout
+    pk = sorted((int(p), int(s), float(t)) for s, t, p in (ln.split(",")[:3] for ln in out.split())
+                if t != "N/A" and p != "N/A")
+    last_v = 0.0
+    worst = 0.0
+    for _, s, t in pk:
+        if s == 0:
+            last_v = t
+        elif s in (1, 2):
+            worst = max(worst, t - last_v)
+    assert worst < 2.0, f"son écrit {worst:.1f} s devant l'image"
+
+
 # ------------------------------------------------------------------ suivi visuel
 def _scene(rng, x, y, tex, h=360, w=640):
     g = np.full((h, w, 3), 110, np.uint8)

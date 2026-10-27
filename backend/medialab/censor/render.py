@@ -38,40 +38,67 @@ def export(src: Path, video: dict, fb: FrameBoxes, fps: float, frames: int, dst:
     acodec = (video.get("acodec") or "").lower()
     audio = ["-map", "1:a?", "-c:a", "copy"] if mkv or acodec in MP4_AUDIO or not acodec else \
         ["-map", "1:a?", "-c:a", "aac", "-b:a", "256k"]
-    subs = ["-map", "1:s?", "-c:s", "copy"] if mkv else []
+    # Sous-titres lus par une 2e ouverture de la source : lus avec le son, leurs paquets espacés laissaient le son
+    # partir des minutes devant l'image dans le fichier, et les lecteurs n'avaient plus de son.
+    subs = ["-map", "2:s?", "-c:s", "copy"] if mkv else []
+    # Image d'abord (elle arrive lentement du flou), puis son et sous-titres ajoutés en une copie bien entrelacée.
+    vid = dst.with_name(f"{dst.stem}.video{dst.suffix}")
     part = dst.with_name(f"{dst.stem}.part{dst.suffix}")
     last_err: MediaLabError | None = None
-    for gpu in ([True, False] if use_gpu else [False]):
-        enc = (ffmpeg.best_encoder("h264") if gpu else None) or "libx264"
-        try:
-            stats = _encode(src, w, h, fps, frames, fb, part, enc, audio, subs, mkv, style, shape, strength, cancel,
-                            progress)
-            last_err = None
-            break
-        except MediaLabError as e:
-            part.unlink(missing_ok=True)
-            last_err = e
-            if e.code == "encoder_failed" and gpu:
-                log.warning("GPU encoder failed; exporting on the CPU")
-                continue
-            raise
-        except BaseException:
-            part.unlink(missing_ok=True)
-            raise
-    if last_err:
-        raise last_err
+    try:
+        for gpu in ([True, False] if use_gpu else [False]):
+            enc = (ffmpeg.best_encoder("h264") if gpu else None) or "libx264"
+            try:
+                stats = _encode(src, w, h, fps, frames, fb, vid, enc, style, shape, strength, cancel,
+                                lambda f, label, eta: progress(f * 0.95, label, eta))
+                last_err = None
+                break
+            except MediaLabError as e:
+                vid.unlink(missing_ok=True)
+                last_err = e
+                if e.code == "encoder_failed" and gpu:
+                    log.warning("GPU encoder failed; exporting on the CPU")
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        _mux(vid, src, part, audio, subs, mkv, float(video.get("duration") or 0), cancel, progress)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    finally:
+        vid.unlink(missing_ok=True)
     os.replace(part, dst)
     return {"file": str(dst), "size": dst.stat().st_size, "rendered_at": time.time(), **stats}
 
 
+def _mux(vid: Path, src: Path, part: Path, audio: list[str], subs: list[str], mkv: bool, duration: float,
+         cancel: threading.Event, progress: Callable[[float, str, float | None], None]) -> None:
+    """Image floutée + son, sous-titres, chapitres de la source, bien entrelacés."""
+    progress(0.95, "Ajout du son", None)
+    try:
+        ffmpeg.run(["-i", str(vid), "-i", str(src), *(["-i", str(src)] if subs else []), "-map", "0:v:0",
+                    "-c:v", "copy", *audio, *subs,
+                    "-disposition:v:0", "default", *(["-default_mode", "passthrough"] if mkv else
+                                                      ["-movflags", "+faststart"]),
+                    "-map_metadata", "1", "-map_chapters", "1", str(part)],
+                   duration=duration or None, cancel=cancel, label="Ajout du son",
+                   on_progress=lambda f, _: progress(0.95 + 0.05 * f, "Ajout du son", None))
+    except MediaLabError as e:
+        if e.code == "disk_full":
+            raise MediaLabError("disk_full", "Plus assez de place sur le disque.", "Libérez de la place puis relancez.",
+                                True, e.detail) from e
+        raise MediaLabError("export_failed", "L'ajout du son à la vidéo floutée a échoué.",
+                            "Ouvrez le journal pour le détail.", True, e.detail) from e
+
+
 def _encode(src: Path, w: int, h: int, fps: float, frames: int, fb: FrameBoxes, part: Path, enc: str,
-            audio: list[str], subs: list[str], mkv: bool, style: str, shape: str, strength: int,
+            style: str, shape: str, strength: int,
             cancel: threading.Event, progress: Callable[[float, str, float | None], None]) -> dict:
     vargs = ffmpeg.encoder_args(enc, 19 if enc.endswith("_nvenc") else 18)
     cmd = [require("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-v", "error",
            "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{w}x{h}", "-r", f"{fps:.6f}", "-i", "-",
-           "-i", str(src), "-map", "0:v:0", *audio, *subs, *vargs, "-g", str(max(1, int(round(fps * 2)))),
-           *([] if mkv else ["-movflags", "+faststart"]), "-map_metadata", "1", "-map_chapters", "1", str(part)]
+           "-map", "0:v:0", *vargs, "-g", str(max(1, int(round(fps * 2)))), str(part)]
     log.debug("export: %s", subprocess.list2cmdline(cmd))
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             creationflags=CREATE_NO_WINDOW, bufsize=w * h * 3)
