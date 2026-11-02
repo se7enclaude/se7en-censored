@@ -74,10 +74,8 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
         src = Path(src_path)
     video = P.video_info(src)
     if not video.get("duration"):
-        raise MediaLabError("no_duration", "La durée de cette vidéo est inconnue.", "Convertissez-la en MP4 d'abord.")
+        raise MediaLabError("no_duration", "La durée de cette vidéo est inconnue.", "Convertis-la en MP4 d'abord.")
     notes = []
-    if video.get("is_hdr"):
-        notes.append("Vidéo HDR : la version floutée sort en SDR (couleurs un peu différentes).")
     cache = P.cache_dir(pid)
     thumb = cache / "thumb.jpg"
     if not thumb.exists():
@@ -101,7 +99,7 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
         except MediaLabError as e:  # l'analyse reste utilisable sans la 2e passe (relançable plus tard)
             log.warning("Second pass failed: %s", e)
             notes.append(f"La 2e passe n'a pas pu se faire ({e.message}) : les zones viennent de la seule analyse. "
-                         "Relancez-la plus tard depuis ce projet.")
+                         "Relance-la plus tard depuis ce projet.")
             P.patch(pid, {"notes": notes})
     with _zones_lock:
         _zones_cache.pop(pid, None)
@@ -136,10 +134,20 @@ def zones(project: dict) -> tuple[list[T.Track], dict]:
     return tracks, meta
 
 
+def frame_boxes(project: dict, tracks: list[T.Track]) -> T.FrameBoxes:
+    """Tout ce qui sera flouté : zones de l'IA (sauf masquées), zones à la main, passages donnés par timecodes."""
+    return T.FrameBoxes(tracks, project.get("manual") or [], project.get("hidden") or [], project.get("segments"),
+                        bool(project["options"].get("ai_outside", True)))
+
+
+def coverage(project: dict, tracks: list[T.Track], meta: dict) -> dict:
+    return T.coverage(tracks, project.get("manual") or [], project.get("hidden") or [], float(meta["fps"]),
+                      int(meta["frames"]), project.get("segments"), bool(project["options"].get("ai_outside", True)))
+
+
 def summary(project: dict) -> dict:
     tracks, meta = zones(project)
-    cov = T.coverage(tracks, project.get("manual") or [], project.get("hidden") or [], float(meta["fps"]),
-                     int(meta["frames"]))
+    cov = coverage(project, tracks, meta)
     return {**cov, "analysis_seconds": meta.get("seconds"), "frames": meta.get("frames")}
 
 
@@ -148,7 +156,7 @@ def export(pid: str, settings, cancel: threading.Event, progress: Progress) -> d
     project = P.patch(pid, {"status": "exporting", "error": None, "step": "export"})
     src = source_path(project)
     tracks, meta = zones(project)
-    fb = T.FrameBoxes(tracks, project.get("manual") or [], project.get("hidden") or [])
+    fb = frame_boxes(project, tracks)
     o = project["options"]
     dst = render.output_path(src, P.output_dir(project))
     old = (project.get("export") or {}).get("file")

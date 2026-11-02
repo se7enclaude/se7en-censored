@@ -2,6 +2,25 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.3.0": {
+        "fr": ["Passages par timecodes : colle une liste (« 12:34 - 13:10 », « 1:02:03.500 », HH:MM:SS:images…), "
+               "ouvre un .txt, .srt ou .csv, ou une capture d'écran (lue sur ton PC). Tu vérifies les passages "
+               "avant de les ajouter ; chacun est flouté en plein cadre ou seulement sur les zones de l'IA.",
+               "Export bien plus rapide : seuls les passages floutés sont réencodés, le reste de l'image est copié "
+               "tel quel, identique à l'original.",
+               "Couleurs fidèles : l'export garde le codec, les 10 bits, les couleurs et le HDR (HDR10, HLG) de la "
+               "source. Avant, un film HDR ressortait en SDR aux couleurs ternes.",
+               "Toute l'interface te tutoie, et l'image demandée est toujours la bonne quand tu sautes dans la "
+               "vidéo (elle pouvait être décalée d'une image)."],
+        "en": ["Passages by timecodes: paste a list (\"12:34 - 13:10\", \"1:02:03.500\", HH:MM:SS:frames…), open a "
+               ".txt, .srt or .csv file, or a screenshot (read on your PC). Check the passages before adding them; "
+               "each one is blurred full frame or only on the AI zones.",
+               "Much faster export: only the blurred passages are re-encoded, the rest of the picture is copied "
+               "as is, identical to the original.",
+               "Faithful colours: the export keeps the source's codec, 10-bit depth, colours and HDR (HDR10, HLG). "
+               "An HDR film used to come out as dull SDR.",
+               "The frame shown after a jump is always the right one (it could be one frame off)."],
+    },
     "1.2.2": {
         "fr": ["Flou plus fort : l'intensité agit vraiment, même en 4K. À 70 (par défaut) on ne distingue plus rien, "
                "à 100 tout est effacé. Le flou est le même dans l'aperçu et à l'export.",

@@ -32,17 +32,24 @@ def analysis_size(w: int, h: int, side: int = 640) -> tuple[int, int]:
 
 
 class Reader:
-    """Images d'une vidéo, une par une (``rgb24`` ou ``yuv420p``), à partir de l'image ``start``."""
+    """Images d'une vidéo, une par une (``rgb24``, ``yuv420p`` ou ``yuv420p10le``), à partir de l'image ``start``.
+
+    ``exact`` (export) : l'image est lue à sa taille, sans redimensionnement ni conversion de couleurs ; seule la
+    profondeur demandée est imposée (une vidéo 10 bits reste en 10 bits)."""
 
     def __init__(self, src: Path, fps: float, size: tuple[int, int], pix_fmt: str = "rgb24", start: int = 0,
-                 cancel: threading.Event | None = None, threads: int = 0) -> None:
+                 cancel: threading.Event | None = None, threads: int = 0, exact: bool = False,
+                 rate: str | None = None) -> None:
         self.w, self.h = size
         self.pix_fmt = pix_fmt
-        self.frame_bytes = self.w * self.h * 3 if pix_fmt == "rgb24" else self.w * self.h * 3 // 2
+        self.dtype = np.uint16 if pix_fmt.endswith("10le") else np.uint8
+        px = self.w * self.h * 3 if pix_fmt == "rgb24" else self.w * self.h * 3 // 2
+        self.frame_bytes = px * np.dtype(self.dtype).itemsize
         self.cancel = cancel
         self.index = start
-        seek = ["-ss", f"{start / fps:.6f}"] if start else []
-        vf = f"fps={fps:.6f},scale={self.w}:{self.h}:flags={'area' if self.w < 1000 else 'bicubic'},format={pix_fmt}"
+        seek = ["-ss", f"{(start - 0.25) / fps:.6f}"] if start else []  # un quart d'image avant : l'image n° start
+        scale = "" if exact else f"scale={self.w}:{self.h}:flags={'area' if self.w < 1000 else 'bicubic'},"
+        vf = f"fps={rate or f'{fps:.6f}'},{scale}format={pix_fmt}"
         cmd = [require("ffmpeg"), "-hide_banner", "-nostdin", "-v", "error", *seek, "-i", str(src),
                "-map", "0:v:0", "-vf", vf, "-threads", str(threads), "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"]
         log.debug("reader: %s", subprocess.list2cmdline(cmd))
@@ -68,9 +75,9 @@ class Reader:
             if self.proc.returncode not in (0, None) and not buf:
                 detail = "\n".join(self._err)
                 raise MediaLabError("decode_failed", "La vidéo n'a pas pu être lue.",
-                                    "Le fichier est peut-être abîmé ; essayez de le convertir en MP4.", True, detail)
+                                    "Le fichier est peut-être abîmé ; essaie de le convertir en MP4.", True, detail)
             return None
-        a = np.frombuffer(buf, np.uint8)
+        a = np.frombuffer(buf, self.dtype)
         a = a.reshape(self.h, self.w, 3) if self.pix_fmt == "rgb24" else a.reshape(self.h * 3 // 2, self.w)
         self.index += 1
         return a
@@ -89,7 +96,7 @@ class Reader:
 
 
 def yuv_planes(frame: np.ndarray, w: int, h: int) -> list[np.ndarray]:
-    """Vues (sans copie) sur les plans Y, U, V d'une image yuv420p."""
+    """Vues (sans copie) sur les plans Y, U, V d'une image yuv420p (8 ou 10 bits)."""
     flat = frame.reshape(-1)
     y = flat[: w * h].reshape(h, w)
     u = flat[w * h: w * h + (w // 2) * (h // 2)].reshape(h // 2, w // 2)
@@ -111,7 +118,7 @@ def grab(src: Path, fps: float, index: int, size: tuple[int, int]) -> np.ndarray
             frame = nxt
         if frame is None:
             raise MediaLabError("frame_extract_failed", "Impossible de lire cette image de la vidéo.",
-                                "Choisissez un autre moment.", True)
+                                "Choisis un autre moment.", True)
         return frame.copy()
     finally:
         r.close()

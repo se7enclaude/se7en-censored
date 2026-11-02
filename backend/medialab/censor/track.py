@@ -283,16 +283,46 @@ def manual_box(zone: dict, f: int) -> np.ndarray | None:
     return np.array([np.interp(f, fs, bs[:, j]) for j in range(4)], np.float32)
 
 
-class FrameBoxes:
-    """Les boîtes à flouter à chaque image (lecture séquentielle rapide pour le rendu)."""
+WHOLE = np.array([0.0, 0.0, 1.0, 1.0], np.float32)
 
-    def __init__(self, tracks: list[Track], manual: list[dict] | None = None, hidden: list[dict] | None = None):
+
+def clean_segments(segments: list[dict] | None) -> list[dict]:
+    """Passages donnés par timecodes : {f0, f1 (inclus), mode « full » (toute l'image floutée) ou « ai » (zones de
+    l'IA seulement)}."""
+    out = []
+    for z in segments or []:
+        try:
+            f0, f1 = int(z["f0"]), int(z["f1"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if f1 >= f0 >= 0:
+            out.append({**z, "f0": f0, "f1": f1, "mode": "ai" if z.get("mode") == "ai" else "full"})
+    return sorted(out, key=lambda z: z["f0"])
+
+
+class FrameBoxes:
+    """Les boîtes à flouter à chaque image (lecture séquentielle rapide pour le rendu).
+
+    ``segments`` : passages donnés par timecodes. Un passage « full » floute toute l'image ; hors des passages « ai »,
+    les zones de l'IA ne comptent que si ``ai_outside``."""
+
+    def __init__(self, tracks: list[Track], manual: list[dict] | None = None, hidden: list[dict] | None = None,
+                 segments: list[dict] | None = None, ai_outside: bool = True):
         self.tracks = [t for t in tracks if not hidden_match(t, hidden or [])]
         self.manual = [z for z in (manual or []) if z.get("keys")]
+        self.segments = clean_segments(segments)
+        self.full = [(z["f0"], z["f1"]) for z in self.segments if z["mode"] == "full"]
+        self.ai = [(z["f0"], z["f1"]) for z in self.segments if z["mode"] == "ai"]
+        self.ai_outside = ai_outside
+
+    def ai_here(self, f: int) -> bool:
+        return self.ai_outside or any(a <= f <= b for a, b in self.ai)
 
     def at(self, f: int) -> list[np.ndarray]:
+        if any(a <= f <= b for a, b in self.full):
+            return [WHOLE]
         out = []
-        for t in self.tracks:
+        for t in self.tracks if self.ai_here(f) else ():
             if t.f0 > f:
                 break
             bx = t.box_at(f)
@@ -306,21 +336,33 @@ class FrameBoxes:
 
     def last_frame(self) -> int:
         ends = [t.f1 for t in self.tracks] + [max(k["f"] for k in z["keys"]) for z in self.manual]
+        ends += [b for _, b in self.full]
         return max(ends, default=-1)
 
 
-def coverage(tracks: list[Track], manual: list[dict], hidden: list[dict], fps: float, frames: int) -> dict:
-    """Résumé pour l'interface : nombre de zones, durée floutée, secondes concernées (frise)."""
-    fb = FrameBoxes(tracks, manual, hidden)
-    secs = max(1, int(np.ceil(frames / (fps or 25.0))))
-    hit = np.zeros(secs, bool)
-    total = 0
+def coverage(tracks: list[Track], manual: list[dict], hidden: list[dict], fps: float, frames: int,
+             segments: list[dict] | None = None, ai_outside: bool = True) -> dict:
+    """Résumé pour l'interface : nombre de zones, durée floutée (images où quelque chose est flouté), secondes
+    concernées (frise)."""
+    fb = FrameBoxes(tracks, manual, hidden, segments, ai_outside)
+    fps = fps or 25.0
+    on = np.zeros(max(1, frames), bool)
+    zones = 0
     for t in fb.tracks:
-        hit[int(t.f0 / fps): int(t.f1 / fps) + 1] = True
-        total += t.f1 - t.f0 + 1
+        span = np.arange(t.f0, min(t.f1, frames - 1) + 1)
+        keep = span if fb.ai_outside else span[[fb.ai_here(int(f)) for f in span]]
+        if len(keep):
+            on[keep] = True
+            zones += 1
     for z in fb.manual:
         fs = [k["f"] for k in z["keys"]]
-        hit[int(min(fs) / fps): int(max(fs) / fps) + 1] = True
-        total += max(fs) - min(fs) + 1
-    return {"zones": len(fb.tracks) + len(fb.manual), "seconds": round(total / (fps or 25.0), 1),
-            "marked_seconds": int(hit.sum())}
+        on[max(0, min(fs)): min(frames, max(fs) + 1)] = True
+        zones += 1
+    for a, b in fb.full:
+        on[a: min(frames, b + 1)] = True
+        zones += 1
+    secs = max(1, int(np.ceil(frames / fps)))
+    hit = np.zeros(secs, bool)
+    idx = np.flatnonzero(on)
+    hit[np.minimum(secs - 1, (idx / fps).astype(int))] = True
+    return {"zones": zones, "seconds": round(len(idx) / fps, 1), "marked_seconds": int(hit.sum())}

@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -37,6 +37,8 @@ class OptionsBody(BaseModel):
     quality: str | None = None
     careful: bool | None = None
     verify: bool | None = None
+    ai_outside: bool | None = None
+    point_margin: float | None = None
 
 
 class ManualBody(BaseModel):
@@ -47,6 +49,16 @@ class FollowBody(BaseModel):
     f: int
     box: list[float]
     seconds: float = 10.0
+
+
+class TimecodesBody(BaseModel):
+    text: str
+    margin: float | None = None
+    ocr: bool = False
+
+
+class SegmentsBody(BaseModel):
+    segments: list[dict]
 
 
 class HideBody(BaseModel):
@@ -170,8 +182,7 @@ def register(app: FastAPI, S) -> None:
 
     def _cov(project: dict) -> dict:
         tracks, meta = pipeline.zones(project)
-        return T.coverage(tracks, project.get("manual") or [], project.get("hidden") or [], float(meta["fps"]),
-                          int(meta["frames"]))
+        return pipeline.coverage(project, tracks, meta)
 
     @app.get("/api/censor/projects/{pid}/zones")
     async def zones(pid: str):
@@ -182,6 +193,7 @@ def register(app: FastAPI, S) -> None:
             return {"fps": meta["fps"], "frames": meta["frames"],
                     "tracks": [{**t.to_dict(), "hidden": T.hidden_match(t, hidden)} for t in tracks],
                     "manual": project.get("manual") or [], "hidden": hidden, "cuts": meta.get("cuts", []),
+                    "segments": T.clean_segments(project.get("segments")),
                     "refined": bool(meta.get("refined")), "stats": _cov(project)}
         return await run_in_threadpool(run)
 
@@ -203,6 +215,58 @@ def register(app: FastAPI, S) -> None:
             return P.save(project)
         return await run_in_threadpool(run)
 
+    def _timing(project: dict) -> tuple[float, int]:
+        loaded = pipeline.detect.load(P.cache_dir(project["id"]))
+        meta = loaded[1] if loaded else {}
+        video = project.get("video") or {}
+        fps = float(meta.get("fps") or video.get("fps") or 25.0)
+        return fps, int(meta.get("frames") or round(float(video.get("duration") or 0) * fps))
+
+    def _read_timecodes(project: dict, text: str, margin: float | None, ocr: bool) -> dict:
+        from . import timecodes as TC
+        fps, frames = _timing(project)
+        m = float(project["options"].get("point_margin", 2.0) if margin is None else margin)
+        res = TC.parse(text, fps, frames / fps if frames else None, max(0.0, min(60.0, m)), ocr=ocr)
+        for r in res["ranges"]:
+            r["f0"], r["f1"] = TC.to_frames(r["start"], r["end"], fps, frames or None)
+        return res
+
+    @app.post("/api/censor/projects/{pid}/timecodes")
+    async def timecodes(pid: str, body: TimecodesBody):
+        """Lit des timecodes dans un texte collé ou un fichier (.txt, .srt, .csv) : plages à vérifier avant de les
+        appliquer, et lignes ignorées avec la raison."""
+        return await run_in_threadpool(_read_timecodes, P.load(pid), body.text[:500_000], body.margin, body.ocr)
+
+    @app.post("/api/censor/projects/{pid}/timecodes/image")
+    async def timecodes_image(pid: str, request: Request, margin: float | None = None):
+        """Lit les timecodes d'une capture d'écran, sur ce PC (corps de la requête : l'image)."""
+        data = await request.body()
+        if not data or len(data) > 40_000_000:
+            raise MediaLabError("bad_image", "Image vide ou trop grande.", "Colle une capture d'écran.")
+
+        def run():
+            from . import ocr
+            lines = ocr.Reader().read(data)
+            return {"lines": lines, **_read_timecodes(P.load(pid), "\n".join(lines), margin, True)}
+        return await run_in_threadpool(run)
+
+    @app.put("/api/censor/projects/{pid}/segments")
+    async def segments(pid: str, body: SegmentsBody):
+        def run():
+            project = P.load(pid)
+            _, frames = _timing(project)
+            clean = []
+            for i, z in enumerate(T.clean_segments(body.segments)):
+                f1 = min(z["f1"], frames - 1) if frames else z["f1"]
+                if f1 < z["f0"]:
+                    continue
+                clean.append({"id": str(z.get("id") or i), "f0": z["f0"], "f1": f1, "mode": z["mode"],
+                              "label": str(z.get("label") or "")[:200]})
+            project["segments"] = clean
+            project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
+            return P.save(project)
+        return await run_in_threadpool(run)
+
     @app.post("/api/censor/projects/{pid}/follow")
     async def follow(pid: str, body: FollowBody):
         """Suit à l'image une zone tracée à la main : renvoie ses images clés (le client les enregistre)."""
@@ -218,7 +282,7 @@ def register(app: FastAPI, S) -> None:
             tracks, _ = pipeline.zones(project)
             t = next((t for t in tracks if t.id == body.track), None)
             if t is None:
-                raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Rechargez le projet.")
+                raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
             project["hidden"] = [*(project.get("hidden") or []), {"cls": t.cls, "f0": t.f0, "f1": t.f1}]
             project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
             return P.save(project)
@@ -244,7 +308,7 @@ def register(app: FastAPI, S) -> None:
             project = P.load(pid)
             src = pipeline.source_path(project)
             tracks, meta = pipeline.zones(project)
-            fb = T.FrameBoxes(tracks, project.get("manual") or [], project.get("hidden") or [])
+            fb = pipeline.frame_boxes(project, tracks)
             idx = max(0, min(int(meta["frames"]) - 1, int(f)))
             o = project["options"]
             if zoom:
@@ -266,7 +330,7 @@ def register(app: FastAPI, S) -> None:
     async def export(pid: str):
         project = P.load(pid)
         if project.get("status") not in ("review", "done"):
-            raise MediaLabError("not_analyzed", "Attendez la fin de l'analyse.")
+            raise MediaLabError("not_analyzed", "Attends la fin de l'analyse.")
         return {"job": start(pid, "export")}
 
     @app.post("/api/censor/projects/{pid}/open-folder")

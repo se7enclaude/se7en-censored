@@ -7,6 +7,7 @@ import { Button, Empty, ErrorAlert, PageHead, Progress, Segmented, Switch, Ticks
 import { useFileIntake } from "../hooks/useFileIntake";
 import { duration as fmtDuration } from "../lib/format";
 import { useApp } from "../store/app";
+import { Passages, Segment } from "./censor/Passages";
 import "../styles/clip.css";
 import "../styles/censor.css";
 
@@ -24,6 +25,8 @@ interface Options {
   quality: "full" | "fast";
   careful: boolean;
   verify?: boolean; // 2e vérification (CLIP) des zones trouvées
+  ai_outside?: boolean; // zones de l'IA aussi en dehors des passages donnés par timecodes
+  point_margin?: number; // un timecode seul : ± secondes
 }
 
 interface Project {
@@ -38,7 +41,8 @@ interface Project {
   options: Options;
   manual: Manual[];
   hidden: { cls: string; f0: number; f1: number }[];
-  export: { file: string; size: number; seconds: number; blurred_frames: number } | null;
+  segments?: Segment[];
+  export: { file: string; size: number; seconds: number; blurred_frames: number; mode?: "smart" | "full"; reencoded_share?: number; smart_skipped?: string; encoder?: string } | null;
   stats: { zones?: number; seconds?: number; analysis_seconds?: number };
   detect?: { v?: number; fps: number; frames: number; seconds: number; gpu: boolean; refined?: number };
 }
@@ -80,6 +84,7 @@ interface Zones {
   manual: Manual[];
   hidden: { cls: string; f0: number; f1: number }[];
   cuts: number[]; // premières images des nouveaux plans (2e passe)
+  segments?: Segment[]; // passages donnés par timecodes
   refined: boolean;
   stats: { zones: number; seconds: number };
 }
@@ -108,6 +113,7 @@ const CLASS_COLOR: Record<string, string> = {
   ANUS_EXPOSED: "#C9A0FF",
   MALE_BREAST_EXPOSED: "#9FD9B5",
   manual: "#FFFFFF",
+  segment: "#B7A6FF", // passage donné par timecodes
 };
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim());
@@ -155,7 +161,7 @@ export function CensorPage() {
 
   return (
     <div className="page-inner wide">
-      <PageHead eyebrow="se7en Censored" title="Floutage auto" echo="pour Twitch" sub="Importez un film ou une vidéo : l'IA repère les parties intimes visibles et les floute, uniquement là où il faut." />
+      <PageHead eyebrow="se7en Censored" title="Floutage auto" echo="pour Twitch" sub="Importe un film ou une vidéo : l'IA repère les parties intimes visibles et les floute, uniquement là où il faut." />
       <NewProject
         onCreated={(p) => {
           refresh();
@@ -165,7 +171,7 @@ export function CensorPage() {
       />
       <div className="label" style={{ margin: "28px 0 12px" }}>Projets</div>
       {projects.length === 0 ? (
-        <Empty icon={<ShieldCheck size={22} />} title="Aucun projet pour l'instant" body="Glissez une vidéo ci-dessus, choisissez-la ou collez son lien : l'analyse démarre tout de suite." />
+        <Empty icon={<ShieldCheck size={22} />} title="Aucun projet pour l'instant" body="Glisse une vidéo ci-dessus, choisis-la ou colle son lien : l'analyse démarre tout de suite." />
       ) : (
         <div className="clip-projects">
           {projects.map((p) => {
@@ -247,7 +253,7 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
         {local ? <Video size={18} className="accent-text" /> : <Link2 size={18} className="faint" />}
         <input
           className="clip-url"
-          placeholder="Glissez une vidéo, choisissez-la, ou collez son chemin ou un lien"
+          placeholder="Glisse une vidéo, choisis-la, ou colle son chemin ou un lien"
           value={local && !typing ? fileName(source) : source}
           title={local ? cleanPath(source) : undefined}
           onChange={(e) => setSource(e.target.value)}
@@ -387,13 +393,13 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
       {p.error && !analyzing && <ErrorAlert error={{ code: p.error.code ?? "error", message: p.error.message, hint: p.error.hint }} />}
       {reviewable && p.detect && (p.detect.v ?? 1) < 2 && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
-          <span>Analysé avec une version précédente : relancez l'analyse pour profiter du suivi visuel des zones (moins de trous dans le flou). Vos zones à la main sont gardées.</span>
+          <span>Analysé avec une version précédente : relance l'analyse pour profiter du suivi visuel des zones (moins de trous dans le flou). Tes zones à la main sont gardées.</span>
           <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Réanalyser</Button>
         </div>
       )}
       {reviewable && p.detect && (p.detect.v ?? 1) >= 2 && !p.detect.refined && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
-          <span>Nouveau : la 2e passe revoit les moments où l'IA a vu de la nudité. Elle écarte ce qui n'en est pas (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan. Quelques minutes, sans refaire l'analyse ; vos zones à la main sont gardées.</span>
+          <span>Nouveau : la 2e passe revoit les moments où l'IA a vu de la nudité. Elle écarte ce qui n'en est pas (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan. Quelques minutes, sans refaire l'analyse ; tes zones à la main sont gardées.</span>
           <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Lancer la 2e passe</Button>
         </div>
       )}
@@ -463,7 +469,8 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   );
 
   // image floutée par le moteur (exactement comme à l'export) quand la vidéo est en pause
-  const optsKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden]);
+  const segments = useMemo(() => p.segments ?? z.segments ?? [], [p.segments, z.segments]);
+  const optsKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden, segments, opts.ai_outside]);
   useEffect(() => {
     if (playing) {
       setStillUrl(null);
@@ -479,11 +486,11 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
 
   // gros plan flouté d'une zone, à côté de l'intensité : la zone de l'image en cours, sinon la plus longue
   const [sample, setSample] = useState<{ f: number; url: string } | null>(null);
-  const fxKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden]);
+  const fxKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden, segments, opts.ai_outside]);
   useEffect(() => {
     if (playing) return;
     let f: number | null = null;
-    if (z.tracks.some((t) => !t.hidden && t.f0 <= frame && frame <= t.f1) || p.manual.some((m) => manualAt(m, frame))) f = frame;
+    if (z.tracks.some((t) => !t.hidden && t.f0 <= frame && frame <= t.f1) || p.manual.some((m) => manualAt(m, frame)) || segments.some((g) => g.f0 <= frame && frame <= g.f1)) f = frame;
     else if (sample && sample.f !== frame && (visible.some((t) => t.f0 <= sample.f && sample.f <= t.f1) || p.manual.some((m) => manualAt(m, sample.f)))) f = sample.f;
     else {
       const t = [...visible].sort((a, b) => b.f1 - b.f0 - (a.f1 - a.f0))[0];
@@ -518,13 +525,14 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       const b = manualAt(m, f);
       if (b) out.push({ box: b, color: CLASS_COLOR.manual, manual: m.id });
     }
+    if (segments.some((g) => g.mode === "full" && g.f0 <= f && f <= g.f1)) out.push({ box: [0.004, 0.004, 0.996, 0.996], color: CLASS_COLOR.segment });
     return out;
   };
 
   const marks = useMemo(() => {
-    const all = [...visible.map((t) => ({ f0: t.f0, f1: t.f1, color: CLASS_COLOR[t.cls] ?? "#fff" })), ...p.manual.map((m) => ({ f0: m.keys[0].f, f1: m.keys[m.keys.length - 1].f, color: CLASS_COLOR.manual }))];
+    const all: { f0: number; f1: number; color: string; segment?: boolean }[] = [...visible.map((t) => ({ f0: t.f0, f1: t.f1, color: CLASS_COLOR[t.cls] ?? "#fff" })), ...p.manual.map((m) => ({ f0: m.keys[0].f, f1: m.keys[m.keys.length - 1].f, color: CLASS_COLOR.manual })), ...segments.map((g) => ({ f0: g.f0, f1: g.f1, color: CLASS_COLOR.segment, segment: true }))];
     return all.sort((a, b) => a.f0 - b.f0);
-  }, [visible, p.manual]);
+  }, [visible, p.manual, segments]);
 
   const jump = (dir: 1 | -1) => {
     const starts = marks.map((m) => m.f0);
@@ -572,7 +580,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       saveManual([...p.manual, { id, fixed: true, keys: [{ f: frame, box }, { f: end, box }] }]);
       setSelected(id);
       const atCut = nextCut != null && end === nextCut - 1;
-      toast({ kind: "info", title: atCut ? `Zone fixe posée pour ${((end - frame + 1) / fps).toFixed(1).replace(".", ",")} s, jusqu'au changement de plan` : `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avancez jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.", timeout: 3500 });
+      toast({ kind: "info", title: atCut ? `Zone fixe posée pour ${((end - frame + 1) / fps).toFixed(1).replace(".", ",")} s, jusqu'au changement de plan` : `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avance jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.", timeout: 3500 });
     } else if (mode === "key" && sel?.fixed) {
       // zone fixe : le nouveau cadre vaut de cette image jusqu'à sa fin, sans suivi
       const keep = sel.keys.filter((k) => k.f < frame);
@@ -595,7 +603,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       toast({
         kind: "info",
         title: r.reason === "flat" ? "Zone sans détail : posée pour 2 s" : `Zone suivie sur ${secs.toFixed(1).replace(".", ",")} s${r.reason === "cut" ? ", jusqu'au changement de plan" : ""}`,
-        body: r.reason === "lost" ? "Elle a été perdue ensuite (changement de plan ou sortie du cadre) : « Finir ici » ou « Recadrer » pour ajuster." : r.reason === "limit" ? "Allez plus loin et « Recadrer » pour continuer le suivi." : undefined,
+        body: r.reason === "lost" ? "Elle a été perdue ensuite (changement de plan ou sortie du cadre) : « Finir ici » ou « Recadrer » pour ajuster." : r.reason === "limit" ? "Va plus loin et « Recadrer » pour continuer le suivi." : undefined,
         timeout: 3500,
       });
     } catch (e) {
@@ -676,7 +684,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
                 ))}
               {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)} height={Math.abs(drag.y1 - drag.y0)} className="draft" vectorEffect="non-scaling-stroke" />}
             </svg>
-            {drawing && <div className="cz-draw-hint">{drawing === "fixed" || (drawing === "key" && sel?.fixed) ? "Tracez un cadre : il restera tel quel, sans bouger" : "Tracez un cadre sur la zone à flouter : elle suivra le mouvement toute seule"} · Échap pour annuler</div>}
+            {drawing && <div className="cz-draw-hint">{drawing === "fixed" || (drawing === "key" && sel?.fixed) ? "Trace un cadre : il restera tel quel, sans bouger" : "Trace un cadre sur la zone à flouter : elle suivra le mouvement toute seule"} · Échap pour annuler</div>}
             {following && <div className="cz-draw-hint">Suivi de la zone…</div>}
           </div>
           <div className="cz-controls">
@@ -700,18 +708,18 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               </span>
             ))}
           </div>
-          {!canPlay && <div className="faint" style={{ fontSize: 12, padding: "6px 14px 12px" }}>Ce format ne se lit pas dans la fenêtre : avancez image par image ou cliquez sur la frise. L'export n'est pas concerné.</div>}
+          {!canPlay && <div className="faint" style={{ fontSize: 12, padding: "6px 14px 12px" }}>Ce format ne se lit pas dans la fenêtre : avance image par image ou clique sur la frise. L'export n'est pas concerné.</div>}
         </div>
 
         <div className="card card-pad cz-manual">
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <span className="label">Zones à la main</span>
             <span className="spacer" />
-            <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Tracez un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Zone qui suit</Button>
-            <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} tip={`Tracez un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
+            <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Trace un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Zone qui suit</Button>
+            <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} tip={`Trace un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
             {sel && (
               <>
-                <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessinez la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessinez la zone à cette image : le suivi repart d'ici (R)"}>Recadrer à cette image</Button>
+                <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessine la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessine la zone à cette image : le suivi repart d'ici (R)"}>Recadrer à cette image</Button>
                 <Button size="sm" variant="outline" tip="La zone s'arrête à cette image, plus tôt ou plus tard (F)" onClick={() => finishHere(sel)}>Finir ici</Button>
                 <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} tip="Supprimer cette zone (Suppr)" onClick={() => removeManual(sel)}>Supprimer</Button>
               </>
@@ -726,9 +734,23 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               ))}
             </div>
           ) : (
-            <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>Une zone ratée par l'IA ? Mettez la vidéo au bon moment, appuyez sur A (ou « Zone qui suit ») et tracez un cadre : la zone suit le mouvement toute seule, jusqu'à 10 s. Pour un simple cadre qui ne bouge pas, choisissez « Zone fixe » (Z). « Recadrer » redessine la zone, « Finir ici » l'arrête.</p>
+            <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>Une zone ratée par l'IA ? Mets la vidéo au bon moment, appuie sur A (ou « Zone qui suit ») et trace un cadre : la zone suit le mouvement toute seule, jusqu'à 10 s. Pour un simple cadre qui ne bouge pas, choisis « Zone fixe » (Z). « Recadrer » redessine la zone, « Finir ici » l'arrête.</p>
           )}
         </div>
+
+        <Passages
+          pid={p.id}
+          fps={fps}
+          frames={total}
+          segments={segments}
+          aiOutside={opts.ai_outside !== false}
+          margin={opts.point_margin ?? 2}
+          frame={frame}
+          onSeek={seek}
+          onSaved={onChange}
+          onError={onError}
+          setOpt={(k, v) => setOpt(k, v as never)}
+        />
       </div>
 
       <div className="cz-side">
@@ -752,9 +774,18 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
             </Button>
           )}
           {p.export?.file && !exporting && (
-            <div className="cz-done">
-              <CheckIcon size={14} /> <span className="ellipsis" title={p.export.file}>{fileName(p.export.file)}</span>
-            </div>
+            <>
+              <div className="cz-done">
+                <CheckIcon size={14} /> <span className="ellipsis" title={p.export.file}>{fileName(p.export.file)}</span>
+              </div>
+              <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
+                {p.export.mode === "smart"
+                  ? `Rendu intelligent : ${Math.max(0.1, Math.round((p.export.reencoded_share ?? 0) * 1000) / 10).toString().replace(".", ",")} % de l'image réencodé, le reste copié à l'identique · ${fmtDuration(p.export.seconds)}`
+                  : p.export.mode === "full"
+                    ? `Export complet${p.export.smart_skipped ? ` (${p.export.smart_skipped})` : ""} · ${fmtDuration(p.export.seconds)}`
+                    : null}
+              </div>
+            </>
           )}
         </div>
 
@@ -785,7 +816,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           <Segmented full size="sm" value={opts.shape} onChange={(v) => setOpt("shape", v)} options={[{ value: "ellipse", label: "Ovale" }, { value: "rect", label: "Rectangle" }]} />
           {opts.style !== "black" && <Range label="Intensité" left="Léger" right="Fort" value={opts.strength} min={0} max={100} onChange={(v) => setOpt("strength", v)} />}
           {sample && (
-            <button className="cz-sample" onClick={() => seek(sample.f)} data-tip="Gros plan sur une zone, floutée exactement comme à l'export. Cliquez pour aller à ce moment.">
+            <button className="cz-sample" onClick={() => seek(sample.f)} data-tip="Gros plan sur une zone, floutée exactement comme à l'export. Clique pour aller à ce moment.">
               <img src={sample.url} alt="Aperçu du flou" draggable={false} />
               <span>Aperçu du flou · {clock(sample.f / fps)}</span>
             </button>
@@ -810,7 +841,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               )}
             </div>
           ))}
-          {z.tracks.length > listed.length && <p className="faint" style={{ fontSize: 12 }}>… et {z.tracks.length - listed.length} autres (utilisez la frise).</p>}
+          {z.tracks.length > listed.length && <p className="faint" style={{ fontSize: 12 }}>… et {z.tracks.length - listed.length} autres (utilise la frise).</p>}
         </div>
       </div>
     </div>
@@ -858,7 +889,7 @@ function Range({ label, left, right, value, min, max, onChange }: { label: strin
   );
 }
 
-function Timeline({ marks, total, frame, onSeek }: { marks: { f0: number; f1: number; color: string }[]; total: number; frame: number; onSeek: (f: number) => void }) {
+function Timeline({ marks, total, frame, onSeek }: { marks: { f0: number; f1: number; color: string; segment?: boolean }[]; total: number; frame: number; onSeek: (f: number) => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const at = (e: React.PointerEvent) => {
     const r = ref.current!.getBoundingClientRect();
@@ -872,7 +903,7 @@ function Timeline({ marks, total, frame, onSeek }: { marks: { f0: number; f1: nu
       onPointerMove={(e) => e.buttons === 1 && at(e)}
     >
       {marks.map((m, i) => (
-        <span key={i} className="cz-mark" style={{ left: `${(m.f0 / total) * 100}%`, width: `max(2px, ${((m.f1 - m.f0 + 1) / total) * 100}%)`, background: m.color }} />
+        <span key={i} className={clsx("cz-mark", m.segment && "seg")} style={{ left: `${(m.f0 / total) * 100}%`, width: `max(2px, ${((m.f1 - m.f0 + 1) / total) * 100}%)`, background: m.segment ? undefined : m.color }} />
       ))}
       <span className="cz-head" style={{ left: `${(frame / total) * 100}%` }} />
     </div>

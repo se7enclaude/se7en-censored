@@ -112,6 +112,11 @@ ASSETS: dict[str, Asset] = {a.id: a for a in [
           "https://github.com/se7enclaude/se7en-censored/releases/download/models/clip_vit_b32_vision.onnx",
           "fd6e1402a588279d1723c7534d4bcba5bc0b14b47dfab0e46f8c47b8270d7d40", 351685709, "nsfw",
           "MIT", "OpenAI (CLIP ViT-B/32), conversion ONNX Xenova"),
+    # ---- se7en Censored : lecture des timecodes sur une capture d'écran (reconnaissance de texte, anglais)
+    Asset("ppocr_en_rec", "ppocr_en_rec_v3.onnx",
+          "https://github.com/se7enclaude/se7en-censored/releases/download/models/ppocr_en_rec_v3.onnx",
+          "ef7abd8bd3629ae57ea2c28b425c1bd258a871b93fd2fe7c433946ade9b5d9ea", 8967018, "ocr",
+          "Apache-2.0", "PaddlePaddle (PaddleOCR PP-OCRv3, reconnaissance anglaise), conversion ONNX RapidOCR"),
 ]}
 
 _lock = threading.Lock()

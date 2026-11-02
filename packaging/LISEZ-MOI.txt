@@ -1,7 +1,7 @@
-se7en Censored — floutage automatique des parties intimes, 100 % sur votre PC
-==========================================================================
+se7en Censored — floutage automatique des parties intimes, 100 % sur ton PC
+========================================================================
 
-Version installée (recommandée) : installez-la depuis Seventh OS, ou lancez se7en-Censored-Setup.exe.
+Version installée (recommandée) : installe-la depuis Seventh OS, ou lance se7en-Censored-Setup.exe.
   - FFmpeg et le détecteur (NudeNet) sont inclus : rien d'autre à télécharger.
   - Une carte graphique (NVIDIA, AMD ou Intel) est fortement conseillée : un film de 2 h s'analyse en 20 à
     40 minutes avec elle, beaucoup plus lentement sans.
@@ -10,23 +10,29 @@ Version installée (recommandée) : installez-la depuis Seventh OS, ou lancez se
     cliquer sur "Informations complémentaires" puis "Exécuter quand même".
 
 Utilisation :
-1. Glissez une vidéo, choisissez-la, ou collez son chemin ou un lien.
-2. L'analyse passe sur toutes les images (vous pouvez l'arrêter et la reprendre plus tard).
+1. Glisse une vidéo, choisis-la, ou colle son chemin ou un lien.
+2. L'analyse passe sur toutes les images (tu peux l'arrêter et la reprendre plus tard).
    Une 2e passe revoit ensuite les moments où l'IA a vu de la nudité : elle écarte ce qui n'en est pas
    (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan.
-3. Vérifiez : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,
-   "Zone qui suit" ou "Zone fixe" floute ce que l'IA a raté. Réglez la sensibilité, la marge et l'effet.
-4. "Exporter la vidéo floutée" : le fichier "<nom> (censuré)" est dans Vidéos\se7en Censored,
-   avec le son d'origine.
+3. Vérifie : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,
+   "Zone qui suit" ou "Zone fixe" floute ce que l'IA a raté. Règle la sensibilité, la marge et l'effet.
+   Tu connais déjà les passages à censurer ? "Ajouter des timecodes" : colle une liste ("12:34 - 13:10"),
+   ouvre un .txt / .srt / .csv ou une capture d'écran (lue sur ton PC). Chaque passage est flouté en plein
+   cadre, ou seulement sur les zones de l'IA.
+4. "Exporter la vidéo floutée" : le fichier "<nom> (censuré)" est dans Vidéos\se7en Censored, avec le son
+   et les sous-titres d'origine. L'image garde la qualité, les couleurs et le HDR de la source.
+   Rendu intelligent : seuls les passages floutés sont réencodés, le reste est copié tel quel (bien plus
+   rapide, identique à l'original). Sinon (codec ou format particulier), toute l'image est réencodée.
 
-Aucune détection n'est parfaite : regardez la frise avant de diffuser.
+Aucune détection n'est parfaite : regarde la frise avant de diffuser.
 Flouter les zones intimes ne rend pas une vidéo conforme à toutes les règles (scènes sexuelles, droits
-d'auteur des films) : vous restez responsable de ce que vous diffusez.
+d'auteur des films) : tu restes responsable de ce que tu diffuses.
 
 Version portable (ce dossier) :
 1. Extraire TOUT le zip (clic droit sur le .zip > Extraire tout...).
-2. Double-cliquer sur se7en-censored.exe. Vos réglages restent dans le dossier "data" à côté.
+2. Double-cliquer sur se7en-censored.exe. Tes réglages restent dans le dossier "data" à côté.
 
 En cas de problème : bouton Journal en haut à droite, ou envoyer le fichier data\logs\crash.log.
 
-Le détecteur est NudeNet (notAI-tech, licence AGPL-3.0) : https://github.com/notAI-tech/NudeNet
+Modèles utilisés : NudeNet (notAI-tech, AGPL-3.0) https://github.com/notAI-tech/NudeNet ;
+CLIP ViT-B/32 (OpenAI, MIT) ; reconnaissance de texte PaddleOCR PP-OCRv3 (PaddlePaddle, Apache-2.0).

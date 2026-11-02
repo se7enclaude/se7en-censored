@@ -23,8 +23,11 @@ DEFAULT_OPTIONS = {
     "quality": "full",   # full : toutes les images ; fast : une sur deux
     "careful": False,    # analyse aussi l'image retournée (plus sûr, deux fois plus long)
     "verify": True,      # 2e vérification (CLIP) : les zones jugées non nues ne sont pas floutées
+    "ai_outside": True,  # zones de l'IA aussi en dehors des passages donnés par timecodes
+    "point_margin": 2.0,  # un timecode seul devient un passage de ± 2 s
 }
-EDITABLE = {"classes", "sensitivity", "margin", "style", "shape", "strength", "quality", "careful", "verify"}
+EDITABLE = {"classes", "sensitivity", "margin", "style", "shape", "strength", "quality", "careful", "verify",
+            "ai_outside", "point_margin"}
 
 
 def root() -> Path:
@@ -58,7 +61,7 @@ def _file(pid: str) -> Path:
 def video_info(path: Path) -> dict:
     info = ffmpeg.probe(path)
     if not info.get("has_video"):
-        raise MediaLabError("no_video_stream", "Ce fichier n'a pas d'image.", "Choisissez une vidéo.")
+        raise MediaLabError("no_video_stream", "Ce fichier n'a pas d'image.", "Choisis une vidéo.")
     w, h = info.get("width"), info.get("height")
     if abs(int(info.get("rotation") or 0)) in (90, 270):
         w, h = h, w
@@ -80,7 +83,8 @@ def create(source: str, options: dict | None = None, output: str | None = None) 
         "created": now, "updated": now,
         "source": {"url": source if is_url else None, "path": None if is_url else str(Path(source).resolve())},
         "video": None, "status": "new", "step": None, "error": None, "notes": [],
-        "options": opts, "output_dir": output, "manual": [], "hidden": [], "export": None, "stats": {},
+        "options": opts, "output_dir": output, "manual": [], "hidden": [], "segments": [], "export": None,
+        "stats": {},
         "thumb": None,
     }
     return save(project)
@@ -91,7 +95,12 @@ def load(pid: str) -> dict:
     with _lock:  # jamais pendant une écriture (Windows refuse de remplacer un fichier ouvert)
         if not f.exists():
             raise MediaLabError("project_not_found", "Ce projet n'existe pas.")
-        return json.loads(f.read_text("utf-8"))
+        project = json.loads(f.read_text("utf-8"))
+    project.setdefault("segments", [])
+    project["options"] = {**DEFAULT_OPTIONS, **(project.get("options") or {})}
+    # depuis la 1.3, une vidéo HDR reste HDR à l'export : l'ancien avertissement n'a plus lieu d'être
+    project["notes"] = [n for n in project.get("notes") or [] if not n.startswith("Vidéo HDR : la version floutée")]
+    return project
 
 
 def save(project: dict) -> dict:
