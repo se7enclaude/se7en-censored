@@ -92,3 +92,6 @@
 .cz-tc-time { width: 104px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-2); color: var(--text-primary); padding: 3px 6px; font-size: 12px; }
 .cz-tc-time.bad { border-color: var(--danger, #e5484d); }
 .cz-tc-src { font-size: 11px; flex: 1; min-width: 0; }
+.cz-scope { margin-top: 14px; }
+.cz-scope .cz-tc-text { min-height: 110px; }
+.cz-scope-sum { margin-top: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }

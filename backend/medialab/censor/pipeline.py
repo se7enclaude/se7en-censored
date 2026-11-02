@@ -85,12 +85,14 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
         except MediaLabError:
             pass
     P.patch(pid, {"video": video, "step": "detect", "notes": notes, "thumb": str(thumb) if thumb.exists() else None})
+    project = apply_scope(pid, video)
     lo = 0.15 if has_url else 0.0
     device = "cpu" if getattr(settings.ai, "gpu_id", "auto") == "cpu" else "auto"
     mid = lo + (1 - lo) * 0.9  # l'analyse, puis la 2e passe (courte : seulement autour de la nudité trouvée)
     det, meta = detect.analyze(src, video, cache, step=2 if opts.get("quality") == "fast" else 1,
                                mirror=bool(opts.get("careful")), device=device, cancel=cancel,
-                               progress=lambda f, lbl, eta: progress(lo + (mid - lo) * f, lbl, eta))
+                               progress=lambda f, lbl, eta: progress(lo + (mid - lo) * f, lbl, eta),
+                               ranges=scope_ranges(project))
     if meta.get("refined") != refine.REFINE_VERSION:
         P.patch(pid, {"step": "verify"})
         try:
@@ -110,6 +112,49 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
                             "stats": stats})
     progress(1.0, "Analyse terminée", 0)
     return project
+
+
+# ------------------------------------------------------------------ analyse limitée à des passages
+def apply_scope(pid: str, video: dict) -> dict:
+    """Timecodes donnés à la création : lus avec la vraie cadence de la vidéo, ils deviennent des passages « zones
+    de l'IA », et l'analyse se limite à eux (``scope_only``)."""
+    project = P.load(pid)
+    scope = project.get("scope")
+    if not scope or project.get("scope_only"):
+        return project
+    from . import timecodes as TC
+    fps = float(video.get("fps") or 25.0)
+    frames = max(1, int(round(float(video.get("duration") or 0) * fps)))
+    res = TC.parse(scope.get("text") or "", fps, frames / fps, float(scope.get("margin", 2.0)))
+    segs = list(project.get("segments") or [])
+    for i, r in enumerate(res["ranges"]):
+        f0, f1 = TC.to_frames(r["start"], r["end"], fps, frames)
+        segs.append({"id": f"tc{i}", "f0": f0, "f1": f1, "mode": "ai", "label": r["text"][:200]})
+    notes = list(project.get("notes") or [])
+    if res["skipped"]:
+        notes.append(f"{len(res['skipped'])} ligne(s) de timecodes ignorée(s) : "
+                     + " ; ".join(f"l. {x['line']} ({x['reason']})" for x in res["skipped"][:5]))
+    if not res["ranges"]:
+        notes.append("Aucun timecode lisible : toute la vidéo est analysée.")
+        return P.patch(pid, {"scope": None, "notes": notes})
+    return P.patch(pid, {"segments": T.clean_segments(segs), "scope_only": True, "notes": notes,
+                         "options": {**project["options"], "ai_outside": False}})
+
+
+def scope_ranges(project: dict) -> list[list[int]] | None:
+    """Plages d'images à analyser : None pour toute la vidéo, sinon les passages « zones de l'IA »."""
+    if not project.get("scope_only"):
+        return None
+    return [[z["f0"], z["f1"] + 1] for z in T.clean_segments(project.get("segments")) if z["mode"] == "ai"]
+
+
+def unanalysed(project: dict, meta: dict) -> int:
+    """Images de passages « zones de l'IA » pas encore analysées (passage ajouté après l'analyse)."""
+    cov = meta.get("covered")
+    if cov is None:
+        return 0
+    want = [[z["f0"], z["f1"] + 1] for z in T.clean_segments(project.get("segments")) if z["mode"] == "ai"]
+    return sum(b - a for a, b in detect.subtract_ranges(want, cov))
 
 
 def zones(project: dict) -> tuple[list[T.Track], dict]:

@@ -179,3 +179,66 @@ def test_ocr_reads_timecodes_from_a_screenshot(ai_models):
     res = TC.parse("\n".join(lines), 25.0, ocr=True)
     assert [(r["start"], r["end"]) for r in res["ranges"]] == [(754, 790), (3721.5, 3725.5)], lines
     assert [s["reason"] for s in res["skipped"]] == ["pas de timecode"]
+
+
+# ------------------------------------------------------------------ analyse limitée aux passages
+def test_range_helpers():
+    from medialab.censor import detect as D
+    assert D.merge_ranges([[10, 20], [0, 5], [18, 30], [40, 40]]) == [[0, 5], [10, 30]]
+    assert D.subtract_ranges([[0, 100]], [[10, 20], [50, 60]]) == [[0, 10], [20, 50], [60, 100]]
+    assert D.subtract_ranges([[10, 20]], [[0, 100]]) == []
+
+
+@pytest.mark.ffmpeg
+def test_analysis_only_inside_passages_then_new_ones_then_all(tmp_path, ffmpeg_bin, monkeypatch):
+    """Seuls les passages donnés sont analysés ; un passage ajouté ensuite est analysé seul ; « toute la vidéo »
+    complète sans refaire ce qui est fait."""
+    import subprocess
+    import threading
+    from medialab.censor import detect as D
+    src = tmp_path / "v.mp4"
+    subprocess.run([ffmpeg_bin, "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=8",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    seen: list[int] = []
+
+    class FakeDetector:
+        gpu = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, rgb, mirror=False):
+            seen.append(int(rgb[0, 0, 0]))  # compte les appels
+            return [(2, 0.6, [0.4, 0.4, 0.6, 0.6])]
+
+    monkeypatch.setattr(D, "Detector", FakeDetector)
+    video = {"fps": 25.0, "duration": 8.0, "width": 320, "height": 240}
+    cache = tmp_path / "c"
+    cache.mkdir()
+    kw = dict(cancel=threading.Event(), progress=lambda *a: None)
+    det, meta = D.analyze(src, video, cache, ranges=[[25, 50], [100, 110]], **kw)
+    assert sorted(set(det["f"][det["t"] == 0].tolist())) == list(range(25, 50)) + list(range(100, 110))
+    assert meta["done"] and meta["covered"] == [[25, 50], [100, 110]] and len(seen) == 35
+    seen.clear()
+    det, meta = D.analyze(src, video, cache, ranges=[[25, 50], [100, 120], [150, 160]], **kw)
+    assert len(seen) == 20                                    # 110-120 et 150-160 seulement
+    assert meta["covered"] == [[25, 50], [100, 120], [150, 160]]
+    seen.clear()
+    det, meta = D.analyze(src, video, cache, **kw)            # toute la vidéo
+    assert len(seen) == 200 - 55 and "covered" not in meta and meta["done"]
+    assert sorted(set(det["f"][det["t"] == 0].tolist())) == list(range(200))
+
+
+def test_timecodes_at_creation_become_ai_passages(tmp_path):
+    from medialab.censor import pipeline
+    src = tmp_path / "film.mp4"
+    src.write_bytes(b"\0")
+    p = P.create(str(src), timecodes="00:10 - 00:20\nnote\n01:00", margin=1)
+    assert p["scope"] == {"text": "00:10 - 00:20\nnote\n01:00", "margin": 1.0}
+    out = pipeline.apply_scope(p["id"], {"fps": 25.0, "duration": 120.0})
+    assert [(s["f0"], s["f1"], s["mode"]) for s in out["segments"]] == [(250, 499, "ai"), (1475, 1524, "ai")]
+    assert out["scope_only"] is True and out["options"]["ai_outside"] is False
+    assert any("ignorée" in n for n in out["notes"])
+    assert pipeline.scope_ranges(out) == [[250, 500], [1475, 1525]]
+    assert pipeline.apply_scope(p["id"], {"fps": 25.0, "duration": 120.0})["segments"] == out["segments"]  # 1 fois
+    P.delete(p["id"])

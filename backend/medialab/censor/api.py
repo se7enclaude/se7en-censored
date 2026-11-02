@@ -25,6 +25,13 @@ class NewProjectBody(BaseModel):
     source: str
     options: dict = {}
     output_dir: str | None = None
+    timecodes: str | None = None  # analyser seulement ces passages
+    margin: float | None = None
+
+
+class PreviewTimecodesBody(BaseModel):
+    text: str
+    margin: float = 2.0
 
 
 class OptionsBody(BaseModel):
@@ -135,13 +142,34 @@ def register(app: FastAPI, S) -> None:
         return {"classes": [{"id": c, "label": label, "default": on} for c, label, on in T.CLASSES],
                 "defaults": P.DEFAULT_OPTIONS, "output_dir": str(P.default_output())}
 
+    @app.post("/api/censor/timecodes")
+    async def preview_timecodes(body: PreviewTimecodesBody):
+        """Aperçu des timecodes avant de créer le projet (cadence encore inconnue : 25 images/s pour HH:MM:SS:FF)."""
+        from . import timecodes as TC
+        return TC.parse(body.text[:500_000], 25.0, None, max(0.0, min(60.0, body.margin)))
+
+    @app.post("/api/censor/timecodes/image")
+    async def preview_timecodes_image(request: Request, margin: float = 2.0):
+        """Lit les timecodes d'une capture d'écran avant de créer le projet (sur ce PC)."""
+        data = await request.body()
+        if not data or len(data) > 40_000_000:
+            raise MediaLabError("bad_image", "Image vide ou trop grande.", "Colle une capture d'écran.")
+
+        def run():
+            from . import ocr
+            from . import timecodes as TC
+            lines = ocr.Reader().read(data)
+            return {"lines": lines, **TC.parse("\n".join(lines), 25.0, None, max(0.0, min(60.0, margin)), ocr=True)}
+        return await run_in_threadpool(run)
+
     @app.get("/api/censor/projects")
     async def listing():
         return {"projects": await run_in_threadpool(P.listing)}
 
     @app.post("/api/censor/projects")
     async def create(body: NewProjectBody):
-        project = await run_in_threadpool(P.create, body.source, body.options, body.output_dir)
+        project = await run_in_threadpool(P.create, body.source, body.options, body.output_dir, body.timecodes,
+                                          body.margin)
         job = start(project["id"], "analyze")
         return {"project": P.load(project["id"]), "job": job}
 
@@ -156,7 +184,13 @@ def register(app: FastAPI, S) -> None:
         return {"ok": True}
 
     @app.post("/api/censor/projects/{pid}/analyze")
-    async def reanalyze(pid: str):
+    async def reanalyze(pid: str, all: bool = False):
+        """Relance l'analyse : les passages pas encore analysés, ou toute la vidéo (``all``) ; ce qui l'a déjà été
+        est gardé."""
+        if all:
+            project = P.load(pid)
+            if project.get("scope_only"):
+                P.patch(pid, {"scope_only": False, "options": {**project["options"], "ai_outside": True}})
         return {"job": start(pid, "analyze")}
 
     @app.post("/api/censor/projects/{pid}/cancel")
@@ -194,7 +228,8 @@ def register(app: FastAPI, S) -> None:
                     "tracks": [{**t.to_dict(), "hidden": T.hidden_match(t, hidden)} for t in tracks],
                     "manual": project.get("manual") or [], "hidden": hidden, "cuts": meta.get("cuts", []),
                     "segments": T.clean_segments(project.get("segments")),
-                    "refined": bool(meta.get("refined")), "stats": _cov(project)}
+                    "refined": bool(meta.get("refined")), "stats": _cov(project),
+                    "scope_only": bool(project.get("scope_only")), "unanalysed": pipeline.unanalysed(project, meta)}
         return await run_in_threadpool(run)
 
     @app.put("/api/censor/projects/{pid}/manual")

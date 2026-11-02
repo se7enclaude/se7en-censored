@@ -2,6 +2,16 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.3.1": {
+        "fr": ["Analyser seulement des passages : en ajoutant une vidéo, choisis « Seulement des passages » et "
+               "colle les timecodes (ou ouvre un fichier, une capture d'écran). L'IA ne vérifie que ces passages, "
+               "bien plus vite qu'un film entier. Un passage ajouté plus tard est analysé seul, et « Analyser toute "
+               "la vidéo » complète sans refaire ce qui est fait."],
+        "en": ["Analyse only some passages: when adding a video, choose \"Only passages\" and paste the "
+               "timecodes (or open a file or a screenshot). The AI only checks those passages, much faster than a "
+               "whole film. A passage added later is analysed on its own, and \"Analyse the whole video\" completes "
+               "the rest without redoing anything."],
+    },
     "1.3.0": {
         "fr": ["Passages par timecodes : colle une liste (« 12:34 - 13:10 », « 1:02:03.500 », HH:MM:SS:images…), "
                "ouvre un .txt, .srt ou .csv, ou une capture d'écran (lue sur ton PC). Tu vérifies les passages "

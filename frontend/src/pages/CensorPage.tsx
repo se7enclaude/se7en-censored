@@ -8,6 +8,7 @@ import { useFileIntake } from "../hooks/useFileIntake";
 import { duration as fmtDuration } from "../lib/format";
 import { useApp } from "../store/app";
 import { Passages, Segment } from "./censor/Passages";
+import { ScopeField } from "./censor/ScopeField";
 import "../styles/clip.css";
 import "../styles/censor.css";
 
@@ -85,6 +86,8 @@ interface Zones {
   hidden: { cls: string; f0: number; f1: number }[];
   cuts: number[]; // premières images des nouveaux plans (2e passe)
   segments?: Segment[]; // passages donnés par timecodes
+  scope_only?: boolean; // seuls les passages « zones de l'IA » sont analysés
+  unanalysed?: number; // images de passages pas encore analysées
   refined: boolean;
   stats: { zones: number; seconds: number };
 }
@@ -212,13 +215,24 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
   const [quality, setQuality] = useState<"full" | "fast">("full");
   const [careful, setCareful] = useState(false);
   const [sending, setSending] = useState(false);
+  const [scope, setScope] = useState<"all" | "passages">("all");
+  const [scopeText, setScopeText] = useState("");
+  const [scopeMargin, setScopeMargin] = useState(2);
+  const [scopeCount, setScopeCount] = useState(0);
+  const onlyPassages = scope === "passages";
+  const ready = isSource(source) && (!onlyPassages || scopeCount > 0);
 
   const create = async (src: string) => {
-    if (!src.trim()) return;
+    if (!src.trim() || (onlyPassages && !scopeCount)) return;
     setSending(true);
     try {
-      const r = await api.post<{ project: Project }>("/api/censor/projects", { source: isUrl(src) ? src.trim() : cleanPath(src), options: { quality, careful } });
+      const r = await api.post<{ project: Project }>("/api/censor/projects", {
+        source: isUrl(src) ? src.trim() : cleanPath(src),
+        options: { quality, careful, point_margin: scopeMargin },
+        ...(onlyPassages ? { timecodes: scopeText, margin: scopeMargin } : {}),
+      });
       setSource("");
+      setScopeText("");
       onCreated(r.project);
     } catch (e) {
       onError(e);
@@ -259,17 +273,29 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
           onChange={(e) => setSource(e.target.value)}
           onFocus={(e) => { setTyping(true); if (local) e.target.select(); }}
           onBlur={() => setTyping(false)}
-          onKeyDown={(e) => e.key === "Enter" && isSource(source) && create(source)}
+          onKeyDown={(e) => e.key === "Enter" && ready && create(source)}
           spellCheck={false}
         />
         <Button variant={local ? "ghost" : "outline"} icon={<Upload size={15} />} onClick={intake.pick}>
           {local ? "Changer" : "Choisir une vidéo"}
         </Button>
-        <Button variant="primary" icon={<WandSparkles size={16} />} loading={sending} disabled={!isSource(source)} onClick={() => create(source)}>
-          Analyser
+        <Button variant="primary" icon={<WandSparkles size={16} />} loading={sending} disabled={!ready} onClick={() => create(source)}>
+          {onlyPassages ? "Analyser ces passages" : "Analyser"}
         </Button>
       </div>
       <div className="clip-options">
+        <div className="clip-opt">
+          <span className="label">À vérifier</span>
+          <Segmented
+            size="sm"
+            value={scope}
+            onChange={setScope}
+            options={[
+              { value: "all", label: "Toute la vidéo", tip: "L'IA passe sur toutes les images" },
+              { value: "passages", label: "Seulement des passages", tip: "Donne les timecodes : l'IA ne vérifie que ces passages, bien plus vite" },
+            ]}
+          />
+        </div>
         <div className="clip-opt">
           <span className="label">Analyse</span>
           <Segmented
@@ -290,6 +316,9 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
           </label>
         </div>
       </div>
+      {onlyPassages && (
+        <ScopeField text={scopeText} setText={setScopeText} margin={scopeMargin} setMargin={setScopeMargin} onCount={setScopeCount} onError={onError} />
+      )}
     </div>
   );
 }
@@ -401,6 +430,18 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Nouveau : la 2e passe revoit les moments où l'IA a vu de la nudité. Elle écarte ce qui n'en est pas (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan. Quelques minutes, sans refaire l'analyse ; tes zones à la main sont gardées.</span>
           <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Lancer la 2e passe</Button>
+        </div>
+      )}
+      {reviewable && zones?.scope_only && !(zones.unanalysed ?? 0) && (
+        <div className="clip-hint" style={{ marginBottom: 12 }}>
+          <span>Seuls tes passages ont été analysés (en violet sur la frise). Ajoute d'autres passages plus bas, ou analyse toute la vidéo : ce qui est déjà fait est gardé.</span>
+          <Button size="sm" variant="outline" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze?all=1`))}>Analyser toute la vidéo</Button>
+        </div>
+      )}
+      {reviewable && (zones?.unanalysed ?? 0) > 0 && (
+        <div className="clip-hint" style={{ marginBottom: 12 }}>
+          <span>Des passages « Zones IA » n'ont pas encore été analysés ({fmtDuration((zones!.unanalysed ?? 0) / (zones!.fps || 25))}) : l'IA n'y a rien cherché.</span>
+          <Button size="sm" variant="primary" icon={<WandSparkles size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Analyser ces passages</Button>
         </div>
       )}
       {p.notes?.map((n) => (
@@ -746,6 +787,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           aiOutside={opts.ai_outside !== false}
           margin={opts.point_margin ?? 2}
           frame={frame}
+          defaultMode={z.scope_only ? "ai" : "full"}
           onSeek={seek}
           onSaved={onChange}
           onError={onError}

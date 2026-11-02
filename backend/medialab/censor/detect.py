@@ -224,9 +224,44 @@ def _save(cache: Path, rows: list, meta: dict) -> None:
     mf.write_text(json.dumps(meta), "utf-8")
 
 
+def merge_ranges(ranges) -> list[list[int]]:
+    """Plages d'images [début, fin exclue] triées et fusionnées."""
+    out: list[list[int]] = []
+    for a, b in sorted((int(a), int(b)) for a, b in ranges if int(b) > int(a)):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def subtract_ranges(want, have) -> list[list[int]]:
+    """Parties de ``want`` qui ne sont pas dans ``have``."""
+    out = []
+    have = merge_ranges(have)
+    for a, b in merge_ranges(want):
+        cur = a
+        for c, d in have:
+            if d <= cur or c >= b:
+                continue
+            if c > cur:
+                out.append([cur, c])
+            cur = max(cur, d)
+        if cur < b:
+            out.append([cur, b])
+    return out
+
+
 def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool = False, device: str = "auto",
-            cancel: threading.Event, progress: Callable[[float, str, float | None], None]) -> tuple[dict, dict]:
-    """Passe le détecteur sur toute la vidéo (une image sur ``step``). Reprend une analyse interrompue."""
+            cancel: threading.Event, progress: Callable[[float, str, float | None], None],
+            ranges: list | None = None) -> tuple[dict, dict]:
+    """Passe le détecteur sur la vidéo (une image sur ``step``). Reprend une analyse interrompue.
+
+    ``ranges`` : seulement ces plages d'images [début, fin exclue] (passages donnés par timecodes). Ce qui a déjà
+    été analysé (``covered``) est gardé : un passage ajouté plus tard est analysé seul."""
+    if ranges is not None:
+        return _analyze_ranges(src, video, cache, step=step, mirror=mirror, device=device, cancel=cancel,
+                               progress=progress, ranges=ranges)
     fps = float(video.get("fps") or 25.0)
     total = max(1, int(round(float(video.get("duration") or 0) * fps)))
     w, h = FR.analysis_size(int(video["width"]), int(video["height"]), SIDE)
@@ -236,6 +271,9 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
     prev = load(cache)
     same = bool(prev) and prev[1].get("v") == DETECT_VERSION and prev[1].get("step") == step \
         and prev[1].get("mirror") == mirror and abs(prev[1].get("fps", 0) - fps) < 1e-3
+    if same and prev[1].get("covered") is not None:  # analyse limitée à des passages : on la complète
+        return _analyze_ranges(src, video, cache, step=step, mirror=mirror, device=device, cancel=cancel,
+                               progress=progress, ranges=[[0, total]], full=True)
     if same and not prev[1].get("done"):
         det, meta = prev
         rows = [(int(f), int(c), float(s), b.tolist(), int(t))
@@ -309,6 +347,82 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
     _save(cache, rows, meta)
     log.info("Analysis done: %d frames, %d raw detections in %.0fs (%s)", frames_seen, len(rows), meta["seconds"],
              "GPU" if detector.gpu else "CPU")
+    return load(cache)  # type: ignore[return-value]
+
+
+def _rows(det: dict) -> list:
+    return [(int(f), int(c), float(s), b.tolist(), int(t))
+            for f, c, s, b, t in zip(det["f"], det["c"], det["s"], det["b"], det["t"])]
+
+
+def _analyze_ranges(src: Path, video: dict, cache: Path, *, step: int, mirror: bool, device: str,
+                    cancel: threading.Event, progress: Callable[[float, str, float | None], None],
+                    ranges: list, full: bool = False) -> tuple[dict, dict]:
+    """Analyse seulement les plages demandées qui ne l'ont pas encore été (voir ``analyze``)."""
+    fps = float(video.get("fps") or 25.0)
+    total = max(1, int(round(float(video.get("duration") or 0) * fps)))
+    ranges = merge_ranges([[max(0, int(a)), min(total, int(b))] for a, b in ranges])
+    w, h = FR.analysis_size(int(video["width"]), int(video["height"]), SIDE)
+    prev = load(cache)
+    same = bool(prev) and prev[1].get("v") == DETECT_VERSION and prev[1].get("step") == step \
+        and prev[1].get("mirror") == mirror and abs(prev[1].get("fps", 0) - fps) < 1e-3
+    if same and prev[1].get("covered") is None and prev[1].get("done"):
+        return prev  # toute la vidéo est déjà analysée
+    covered = merge_ranges(prev[1].get("covered") or []) if same else []
+    rows: list = _rows(prev[0]) if same else []
+    meta = {**(prev[1] if same else {}), "v": DETECT_VERSION, "fps": fps, "step": step, "mirror": mirror,
+            "size": [w, h], "frames": total, "covered": covered, "done": False}
+    todo = subtract_ranges(ranges, covered)
+    if not todo and same and prev[1].get("done"):
+        return prev
+    if todo:
+        meta.pop("refined", None)  # de nouvelles images : la 2e passe est à refaire
+    need = sum(b - a for a, b in todo)
+    log.info("Analysing %d frames in %d passages (%.1f %% of the video)", need, len(todo), 100 * need / total)
+    t0 = time.monotonic()
+    seen = 0
+    gpu = bool(meta.get("gpu"))
+    if todo:
+        progress(0.0, "Chargement du détecteur", None)
+        detector = Detector(device, lambda d, t: progress(0.0, f"Téléchargement du détecteur · {d * 100 // max(t, 1)} %",
+                                                          None))
+        gpu = detector.gpu
+        last_ui = 0.0
+        for a, b in todo:
+            reader = FR.Reader(src, fps, (w, h), "rgb24", start=a, cancel=cancel)
+            watch = Watch(fps * FOLLOW_KEEP_S, step)
+            i = a
+            try:
+                while i < b:
+                    fr = reader.read()
+                    if fr is None:
+                        break
+                    if i % step == 0:
+                        found = detector.run(fr, mirror)
+                        rows.extend((i, c, sc, bx, 0) for c, sc, bx in found)
+                        rows.extend((i, c, sc, bx, 1) for c, sc, bx in watch.step(i, fr, found))
+                    i += 1
+                    seen += 1
+                    now = time.monotonic()
+                    if now - last_ui > 0.5:
+                        last_ui = now
+                        rate = seen / max(1e-6, now - t0)
+                        progress(seen / need, f"Analyse des passages · {rate:.0f} images/s",
+                                 (need - seen) / max(rate, 1e-6))
+            except BaseException:
+                covered = merge_ranges([*covered, [a, i]])
+                _save(cache, rows, {**meta, "covered": covered})
+                raise
+            finally:
+                reader.close()
+            covered = merge_ranges([*covered, [a, b]])
+            _save(cache, rows, {**meta, "covered": covered})
+    meta = {**meta, "covered": covered, "done": True, "next": total, "gpu": gpu,
+            "seconds": round(float(meta.get("seconds") or 0) + time.monotonic() - t0, 1)}
+    if full and not subtract_ranges([[0, total]], covered):
+        meta.pop("covered", None)  # toute la vidéo est maintenant analysée
+    _save(cache, rows, meta)
+    log.info("Passages analysed: %d frames, %d raw detections in %.0fs", seen, len(rows), time.monotonic() - t0)
     return load(cache)  # type: ignore[return-value]
 
 

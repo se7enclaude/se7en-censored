@@ -11,7 +11,8 @@ Version installée (recommandée) : installe-la depuis Seventh OS, ou lance se7e
 
 Utilisation :
 1. Glisse une vidéo, choisis-la, ou colle son chemin ou un lien.
-2. L'analyse passe sur toutes les images (tu peux l'arrêter et la reprendre plus tard).
+2. L'analyse passe sur toutes les images (tu peux l'arrêter et la reprendre plus tard). Tu connais déjà les
+   passages ? Choisis "Seulement des passages" et colle leurs timecodes : l'IA ne vérifie qu'eux.
    Une 2e passe revoit ensuite les moments où l'IA a vu de la nudité : elle écarte ce qui n'en est pas
    (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan.
 3. Vérifie : la frise montre chaque zone trouvée. "Pas une zone intime" retire une fausse détection,

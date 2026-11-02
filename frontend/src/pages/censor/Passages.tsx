@@ -68,7 +68,7 @@ export function parseTc(v: string): number | null {
   return h * 3600 + mi * 60 + sec;
 }
 
-export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame, onSeek, onSaved, onError, setOpt }: {
+export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame, defaultMode = "full", onSeek, onSaved, onError, setOpt }: {
   pid: string;
   fps: number;
   frames: number;
@@ -76,6 +76,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
   aiOutside: boolean;
   margin: number;
   frame: number;
+  defaultMode?: SegmentMode;
   onSeek: (f: number) => void;
   onSaved: () => void;
   onError: (e: unknown) => void;
@@ -126,13 +127,14 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
           </label>
         </>
       )}
-      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => setOpen(false))} onError={onError} />
+      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => setOpen(false))} onError={onError} />
     </div>
   );
 }
 
-function ImportTimecodes({ open, onClose, pid, margin, setMargin, onAdd, onError }: {
+function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, onAdd, onError }: {
   open: boolean;
+  defaultMode: SegmentMode;
   onClose: () => void;
   pid: string;
   margin: number;
@@ -170,7 +172,7 @@ function ImportTimecodes({ open, onClose, pid, margin, setMargin, onAdd, onError
         .post<Parsed>(`/api/censor/projects/${pid}/timecodes`, { text, margin, ocr: fromImage })
         .then((r) => {
           setParsed(r);
-          setRows(r.ranges.map((x, i) => ({ key: `${x.line}-${i}`, start: tc(x.start), end: tc(x.end), mode: "full", keep: true, src: x })));
+          setRows(r.ranges.map((x, i) => ({ key: `${x.line}-${i}`, start: tc(x.start), end: tc(x.end), mode: defaultMode, keep: true, src: x })));
         })
         .catch(onError)
         .finally(() => setReading(""));

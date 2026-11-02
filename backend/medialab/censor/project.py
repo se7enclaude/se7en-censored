@@ -71,7 +71,8 @@ def video_info(path: Path) -> dict:
             "is_hdr": bool(info.get("is_hdr"))}
 
 
-def create(source: str, options: dict | None = None, output: str | None = None) -> dict:
+def create(source: str, options: dict | None = None, output: str | None = None, timecodes: str | None = None,
+           margin: float | None = None) -> dict:
     source = source.strip().strip('"')
     is_url = bool(re.match(r"https?://", source, re.I))
     if not is_url and not Path(source).is_file():
@@ -86,6 +87,10 @@ def create(source: str, options: dict | None = None, output: str | None = None) 
         "options": opts, "output_dir": output, "manual": [], "hidden": [], "segments": [], "export": None,
         "stats": {},
         "thumb": None,
+        # timecodes donnés à la création : lus au début de l'analyse (pipeline.apply_scope)
+        "scope": {"text": timecodes[:500_000], "margin": float(margin if margin is not None else
+                                                                opts.get("point_margin", 2.0))}
+        if timecodes and timecodes.strip() else None,
     }
     return save(project)
 
