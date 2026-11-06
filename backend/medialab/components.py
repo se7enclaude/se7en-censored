@@ -48,13 +48,13 @@ class ComponentSpec:
 
 
 SPECS: dict[str, ComponentSpec] = {
-    "ffmpeg": ComponentSpec("ffmpeg", "FFmpeg", "Merging, conversion, metadata, video encoding",
-                            ("ffmpeg", "ffprobe"), "download, upscale"),
+    "ffmpeg": ComponentSpec("ffmpeg", "FFmpeg", "Lecture, encodage et export des vidéos",
+                            ("ffmpeg", "ffprobe"), "le floutage"),
     "realesrgan": ComponentSpec("realesrgan", "Real-ESRGAN (ncnn-Vulkan)",
                                 "AI upscaling on any Vulkan GPU (NVIDIA, AMD, Intel)",
                                 ("realesrgan-ncnn-vulkan",), "upscale"),
-    "deno": ComponentSpec("deno", "Deno (JavaScript runtime)",
-                          "Required by the engine for complete YouTube format lists", ("deno",), "download"),
+    "deno": ComponentSpec("deno", "Deno (moteur JavaScript)",
+                          "Utile pour les vidéos YouTube importées par lien", ("deno",), "les liens"),
     "realcugan": ComponentSpec("realcugan", "Real-CUGAN (ncnn-Vulkan)", "Anime / cartoon upscaling, 2x-4x",
                                ("realcugan-ncnn-vulkan",), "upscale"),
     "rife": ComponentSpec("rife", "RIFE (ncnn-Vulkan)", "Frame interpolation: smoother videos (30 → 60 fps)",
@@ -63,10 +63,10 @@ SPECS: dict[str, ComponentSpec] = {
                              ("whisper-cli", "whisper-vad-speech-segments"), "subtitles"),
     "llama": ComponentSpec("llama", "llama.cpp (Vulkan)", "Local language model: subtitle correction and translation",
                            ("llama-server",), "subtitles"),
-    "aipack": ComponentSpec("aipack", "Détecteur (IA)", "Le modèle qui repère les zones à flouter (NudeNet, ~100 Mo)",
-                            (), "upscale"),
-    "ytdlp": ComponentSpec("ytdlp", "yt-dlp engine update", "Latest extractors without reinstalling se7en",
-                           (), "download", optional=True),
+    "aipack": ComponentSpec("aipack", "Détecteur (IA)", "Les modèles qui repèrent les zones à flouter (NudeNet et CLIP)",
+                            (), "le floutage"),
+    "ytdlp": ComponentSpec("ytdlp", "Moteur de téléchargement (yt-dlp)", "Mise à jour pour les vidéos importées par lien, sans réinstaller se7en",
+                           (), "les liens", optional=True),
     "aria2": ComponentSpec("aria2", "aria2", "Optional multi-connection downloader for direct files",
                            ("aria2c",), "download", optional=True),
 }
@@ -181,7 +181,7 @@ def status() -> list[dict]:
     rt = js_runtime()
     deno_item = _spec_dict("deno")
     if rt and rt[0] != "deno":
-        deno_item["name"] = f"JavaScript runtime ({ {'node': 'Node.js', 'bun': 'Bun'}.get(rt[0], rt[0]) } detected)"
+        deno_item["name"] = f"Moteur JavaScript ({ {'node': 'Node.js', 'bun': 'Bun'}.get(rt[0], rt[0]) } trouvé)"
     items.append({**deno_item, "installed": bool(rt), "path": rt[1] if rt else None,
                   "version": (_version_of(rt[1], ["--version"], r"(?:deno\s+)?v?(\d+\.\d+\.\d+)") if rt else None),
                   "runtime": rt[0] if rt else None})

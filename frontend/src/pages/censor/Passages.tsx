@@ -83,7 +83,8 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
   setOpt: (k: "ai_outside" | "point_margin", v: boolean | number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const save = (next: Segment[]) => api.put(`/api/censor/projects/${pid}/segments`, { segments: next }).then(onSaved).catch(onError);
+  const put = (next: Segment[]) => api.put(`/api/censor/projects/${pid}/segments`, { segments: next }).then(onSaved);
+  const save = (next: Segment[]) => put(next).catch(onError);
   const add = (rows: { start: number; end: number; mode: SegmentMode; label: string }[]) => {
     const made = rows.map((r) => ({
       id: Math.random().toString(36).slice(2, 10),
@@ -92,7 +93,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
       mode: r.mode,
       label: r.label,
     }));
-    return save([...segments, ...made].sort((a, b) => a.f0 - b.f0));
+    return put([...segments, ...made].sort((a, b) => a.f0 - b.f0));
   };
 
   return (
@@ -127,7 +128,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
           </label>
         </>
       )}
-      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => setOpen(false))} onError={onError} />
+      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => setOpen(false)).catch(onError)} onError={onError} />
     </div>
   );
 }
@@ -172,7 +173,14 @@ function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, o
         .post<Parsed>(`/api/censor/projects/${pid}/timecodes`, { text, margin, ocr: fromImage })
         .then((r) => {
           setParsed(r);
-          setRows(r.ranges.map((x, i) => ({ key: `${x.line}-${i}`, start: tc(x.start), end: tc(x.end), mode: defaultMode, keep: true, src: x })));
+          setRows((old) => {
+            const prev = new Map(old.map((o) => [o.key, o]));
+            return r.ranges.map((x, i) => {
+              const key = `${x.line}-${i}`;
+              const o = prev.get(key);
+              return { key, start: tc(x.start), end: tc(x.end), mode: o?.mode ?? defaultMode, keep: o?.keep ?? true, src: x };
+            });
+          });
         })
         .catch(onError)
         .finally(() => setReading(""));

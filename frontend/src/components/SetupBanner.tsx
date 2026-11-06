@@ -24,16 +24,25 @@ export function SetupBanner() {
   const installAll = async () => {
     // one at a time: the backend installs components sequentially
     for (const c of missing) {
-      await api.post(`/api/components/${c.id}/install`);
+      try {
+        await api.post(`/api/components/${c.id}/install`);
+      } catch (e: any) {
+        useApp.getState().toast({ kind: "error", title: t("components.failed"), body: e?.message });
+        return;
+      }
       await new Promise<void>((resolve) => {
+        const started = Date.now();
         const iv = window.setInterval(() => {
           const st = useApp.getState().componentProgress[c.id]?.state;
-          if (st === "installed" || st === "failed") {
+          const busyNow = st === "starting" || st === "downloading" || st === "extracting";
+          // fin de l'installation, ou plus de nouvelles depuis 10 min (connexion au moteur perdue)
+          if (st === "installed" || st === "failed" || st === "restart_required" || (!busyNow && Date.now() - started > 600_000)) {
             window.clearInterval(iv);
             resolve();
           }
         }, 400);
       });
+      if (useApp.getState().componentProgress[c.id]?.state === "failed") return;
     }
   };
   const p = busy ? progress[busy.id] : undefined;

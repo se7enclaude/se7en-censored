@@ -16,7 +16,7 @@ import {
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Settings, UpdateState } from "../api/types";
-import { Button, Notice, PageHead, Progress, Segmented, Select, Switch } from "../components/ui";
+import { Button, Modal, Notice, PageHead, Progress, Segmented, Switch } from "../components/ui";
 import { useT } from "../i18n";
 import { bytes, relative } from "../lib/format";
 import { play } from "../lib/sounds";
@@ -138,9 +138,6 @@ function General({ s, upd }: SP) {
   const g = s.general;
   return (
     <>
-      <Row title={t("set.language")}>
-        <Select value={g.language} onChange={(v) => upd({ general: { language: v } })} options={[{ value: "auto", label: t("set.auto") }, { value: "en", label: "English" }, { value: "fr", label: "Français" }]} />
-      </Row>
       <Row title={t("set.theme")}>
         <Segmented value={g.theme} onChange={(v) => upd({ general: { theme: v } })} full options={[{ value: "dark", label: t("set.dark") }, { value: "light", label: t("set.light") }, { value: "system", label: t("set.system") }]} />
       </Row>
@@ -283,6 +280,17 @@ function Advanced({ s, upd }: SP) {
   const t = useT();
   const a = s.advanced;
   const info = useApp((x) => x.info);
+  const toast = useApp((x) => x.toast);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const reset = async () => {
+    try {
+      const r = await api.post<Settings>("/api/settings/reset");
+      useApp.setState({ settings: r });
+      setConfirmReset(false);
+    } catch (e: any) {
+      toast({ kind: "error", title: e.message, body: e.hint });
+    }
+  };
   return (
     <>
       <Row title={t("adv.debug")} desc={t("adv.debugDesc")}>
@@ -310,10 +318,23 @@ function Advanced({ s, upd }: SP) {
         </div>
       </Row>
       <Row title={t("adv.reset")} desc={t("adv.resetDesc")}>
-        <Button size="sm" variant="ghost" className="btn-danger" icon={<SlidersHorizontal size={14} />} onClick={async () => { const r = await api.post<Settings>("/api/settings/reset"); useApp.setState({ settings: r }); }}>
+        <Button size="sm" variant="ghost" className="btn-danger" icon={<SlidersHorizontal size={14} />} onClick={() => setConfirmReset(true)}>
           {t("adv.resetBtn")}
         </Button>
       </Row>
+      <Modal
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        title="Tout réinitialiser ?"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmReset(false)}>Annuler</Button>
+            <Button variant="primary" onClick={reset}>{t("adv.resetBtn")}</Button>
+          </>
+        }
+      >
+        Tous les réglages reprennent leur valeur par défaut (thème, sons, export…). Tes projets et tes vidéos ne sont pas touchés.
+      </Modal>
     </>
   );
 }
@@ -340,7 +361,7 @@ function About() {
         <div>
           <Wordmark size={44} />
           <div className="label" style={{ marginTop: 10 }}>Floutage automatique · v{info?.version}</div>
-          <div className="faint">{info?.portable ? "Portable Edition" : t("about.installed")} · {info?.data_dir}</div>
+          <div className="faint">{info?.portable ? t("about.portable") : t("about.installed")} · {info?.data_dir}</div>
         </div>
       </div>
       <Notice kind="warning" title={t("about.legalTitle")}>{t("about.legal")}</Notice>

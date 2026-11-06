@@ -132,9 +132,28 @@ def patch(pid: str, changes: dict) -> dict:
         return save(project)
 
 
+def exists(pid: str) -> bool:
+    try:
+        return _file(pid).exists()
+    except MediaLabError:
+        return False
+
+
 def delete(pid: str) -> None:
+    try:
+        project = load(pid)
+    except (MediaLabError, OSError, ValueError):
+        project = {}
     _file(pid).unlink(missing_ok=True)
     shutil.rmtree(root() / "cache" / pid, ignore_errors=True)
+    # une vidéo téléchargée depuis un lien appartient au projet : elle part avec lui
+    src = (project.get("source") or {}).get("path")
+    if src and (project.get("source") or {}).get("url"):
+        try:
+            if Path(src).resolve().is_relative_to((root() / "sources").resolve()):
+                Path(src).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def listing() -> list[dict]:

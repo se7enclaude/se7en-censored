@@ -18,7 +18,7 @@ export function HistoryPage() {
   const setPage = useApp((s) => s.setPage);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState<Kind>("");
+  const [kind] = useState<Kind>("");
   const [platform, setPlatform] = useState("");
   const [view, setView] = useState<"grid" | "list">(() => {
     try {
@@ -79,19 +79,6 @@ export function HistoryPage() {
           <Search size={15} />
           <input className="input" placeholder={t("history.search")} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <Segmented<Kind>
-          value={kind}
-          onChange={setKind}
-          options={[
-            { value: "", label: t("queue.filter.all") },
-            { value: "download", label: t("queue.filter.download") },
-            { value: "upscale", label: t("queue.filter.upscale") },
-            { value: "convert", label: t("nav.convert") },
-            { value: "trim", label: t("nav.trim") },
-            { value: "studio", label: t("nav.studio") },
-            { value: "subtitles", label: t("nav.subtitles") },
-          ]}
-        />
         {platforms.length > 1 && (
           <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
             {platforms.map(([key, name]) => (
@@ -227,7 +214,7 @@ function HistoryActions({ item, onOpen, onAgain, onDelete }: { item: HistoryItem
       <Button size="sm" variant="ghost" iconOnly icon={<PlayCircle size={15} />} tip={t("player.play")} disabled={!item.exists || !item.file_path} onClick={() => openInPlayer([item.file_path!])} />
       <Button size="sm" variant="ghost" iconOnly icon={<File size={15} />} tip={t("common.openFile")} disabled={!item.exists} onClick={() => onOpen(item, false)} />
       <Button size="sm" variant="ghost" iconOnly icon={<FolderOpen size={15} />} tip={t("common.showInFolder")} disabled={!item.exists} onClick={() => onOpen(item, true)} />
-      <Button size="sm" variant="ghost" iconOnly icon={<RotateCcw size={15} />} tip={item.kind === "download" ? t("history.downloadAgain") : t("history.upscaleAgain")} onClick={() => onAgain(item)} />
+      {item.kind !== "censor" && <Button size="sm" variant="ghost" iconOnly icon={<RotateCcw size={15} />} tip={item.kind === "download" ? t("history.downloadAgain") : t("history.upscaleAgain")} onClick={() => onAgain(item)} />}
       <span className="spacer" />
       <Button size="sm" variant="ghost" iconOnly className="btn-danger" icon={<Trash2 size={15} />} tip={t("history.delete")} onClick={() => onDelete(item)} />
     </div>

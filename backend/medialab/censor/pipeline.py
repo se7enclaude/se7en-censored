@@ -8,7 +8,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..errors import MediaLabError
+from ..errors import Canceled, MediaLabError
 from ..logging_setup import get_logger
 from ..media import ffmpeg
 from . import detect, refine, render
@@ -18,7 +18,8 @@ from . import track as T
 log = get_logger("censor")
 Progress = Callable[[float, str, float | None], None]
 
-_zones_cache: dict[str, tuple[tuple, list[T.Track]]] = {}
+_zones_cache: dict[str, tuple[tuple, list[T.Track], dict]] = {}  # les derniers projets ouverts
+ZONES_CACHE_MAX = 3
 _zones_lock = threading.Lock()
 
 
@@ -110,7 +111,10 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
     project = P.patch(pid, {"status": "review", "step": None, "detect": {k: meta.get(k) for k in
                                                                          ("v", "fps", "frames", "step", "mirror", "seconds", "gpu", "refined")},
                             "stats": stats})
-    progress(1.0, "Analyse terminée", 0)
+    try:
+        progress(1.0, "Analyse terminée", 0)
+    except Canceled:  # « Arrêter » au moment même où l'analyse finit : elle est finie, on la garde
+        pass
     return project
 
 
@@ -161,21 +165,29 @@ def zones(project: dict) -> tuple[list[T.Track], dict]:
     """Pistes calculées avec les réglages actuels (mises en cache tant que rien ne change)."""
     pid = project["id"]
     cache = P.cache_dir(pid)
+    params = T.Params.from_options(project["options"])
+    # clé calculée avant de relire les détections : chaque aperçu d'image ne redécompresse pas des dizaines de Mo
+    try:
+        stamp = tuple(f.stat().st_mtime_ns for f in detect._store(cache))
+    except OSError:
+        stamp = None
+    key = (stamp, tuple(params.classes), params.sensitivity, params.margin, params.verify)
+    with _zones_lock:
+        hit = _zones_cache.get(pid)
+        if stamp and hit and hit[0] == key:
+            _zones_cache[pid] = _zones_cache.pop(pid)  # le plus récent en dernier
+            return hit[1], hit[2]
     loaded = detect.load(cache)
     if not loaded or not loaded[1].get("done"):
         raise MediaLabError("not_analyzed", "Cette vidéo n'est pas encore analysée.")
     det, meta = loaded
     meta = {**meta, "cuts": [int(x) for x in det.get("cuts", [])]}  # changements de plan (2e passe)
-    params = T.Params.from_options(project["options"])
-    npz = cache / "detections.npz"
-    key = (npz.stat().st_mtime, tuple(params.classes), params.sensitivity, params.margin, params.verify)
-    with _zones_lock:
-        hit = _zones_cache.get(pid)
-        if hit and hit[0] == key:
-            return hit[1], meta
     tracks = T.build(det, float(meta["fps"]), int(meta["frames"]), params, int(meta.get("step") or 1))
     with _zones_lock:
-        _zones_cache[pid] = (key, tracks)
+        _zones_cache.pop(pid, None)
+        _zones_cache[pid] = (key, tracks, meta)
+        while len(_zones_cache) > ZONES_CACHE_MAX:
+            _zones_cache.pop(next(iter(_zones_cache)))
     return tracks, meta
 
 
@@ -203,8 +215,8 @@ def export(pid: str, settings, cancel: threading.Event, progress: Progress) -> d
     tracks, meta = zones(project)
     fb = frame_boxes(project, tracks)
     o = project["options"]
-    dst = render.output_path(src, P.output_dir(project))
     old = (project.get("export") or {}).get("file")
+    dst = render.output_path(src, P.output_dir(project), old)
     res = render.export(src, project["video"], fb, float(meta["fps"]), int(meta["frames"]), dst,
                         style=o.get("style", "blur"), shape=o.get("shape", "ellipse"), strength=int(o.get("strength", 70)),
                         cancel=cancel, progress=progress,
@@ -212,7 +224,10 @@ def export(pid: str, settings, cancel: threading.Event, progress: Progress) -> d
     if old and old != res["file"]:
         Path(old).unlink(missing_ok=True)
     project = P.patch(pid, {"status": "done", "step": None, "export": res})
-    progress(1.0, "Vidéo exportée", 0)
+    try:
+        progress(1.0, "Vidéo exportée", 0)
+    except Canceled:  # l'export est déjà écrit
+        pass
     log.info("Export of %s done in %.0fs", project.get("name"), time.time() - res["rendered_at"] + res["seconds"])
     return project
 

@@ -18,7 +18,7 @@ def _default_video_dir() -> str:
 
 class GeneralSettings(BaseModel):
     language: Literal["auto", "en", "fr"] = "auto"
-    theme: Literal["dark", "light", "system"] = "light"
+    theme: Literal["dark", "light", "system"] = "dark"
     accent: str = "#7c5cff"
     notifications: bool = True
     notification_sound: bool = True
@@ -116,7 +116,7 @@ class AdvancedSettings(BaseModel):
     api_port: int = 0  # 0 = random free port
 
 
-SETTINGS_VERSION = 3
+SETTINGS_VERSION = 4
 
 
 class Settings(BaseModel):
@@ -145,6 +145,9 @@ def _migrate(data: dict) -> dict:
         g = data.setdefault("general", {})
         if g.get("theme") in (None, "dark"):
             g["theme"] = "light"
+    if v < 4:
+        # se7en Censored 1.4: dark by default, once; the theme stays changeable in Settings
+        data.setdefault("general", {})["theme"] = "dark"
     data["version"] = SETTINGS_VERSION
     return data
 

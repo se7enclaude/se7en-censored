@@ -161,7 +161,7 @@ export interface JobProgress {
   strategy?: string | null;
 }
 
-export type JobKind = "download" | "upscale" | "convert" | "trim" | "studio" | "subtitles" | "clip";
+export type JobKind = "download" | "upscale" | "convert" | "trim" | "studio" | "subtitles" | "clip" | "censor";
 
 export interface Job {
   id: string;

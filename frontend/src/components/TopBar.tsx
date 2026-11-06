@@ -26,12 +26,12 @@ export function TopBar({ onLogo }: { onLogo: () => void }) {
   const setPage = useApp((s) => s.setPage);
   const jobs = useApp((s) => s.jobs);
   const hw = useApp((s) => s.hardware);
-  const caps = useApp((s) => s.capabilities);
   const connected = useApp((s) => s.connected);
 
   const active = useMemo(() => Object.values(jobs).filter((j) => ["waiting", "analyzing", "downloading", "processing"].includes(j.status)).length, [jobs]);
   const gpu = hw?.gpus?.[0];
-  const aiReady = caps?.backends.some((b) => b.id !== "classic" && b.available);
+  // le détecteur NudeNet (composant « aipack ») est ce qui compte ici
+  const aiReady = useApp((s) => s.components.some((c) => c.id === "aipack" && c.installed));
   const status = !connected
     ? { cls: "off", text: t("app.reconnecting") }
     : gpu && aiReady

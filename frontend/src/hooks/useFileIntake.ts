@@ -35,7 +35,13 @@ export function useFileIntake({
   const addPaths = useCallback(
     async (paths: string[]) => {
       if (!paths.length) return;
-      const r = await api.post<{ files: LocalFile[] }>("/api/files/probe", { paths: multiple ? paths : paths.slice(0, 1) });
+      let r: { files: LocalFile[] };
+      try {
+        r = await api.post<{ files: LocalFile[] }>("/api/files/probe", { paths: multiple ? paths : paths.slice(0, 1) });
+      } catch (e: any) {
+        toast({ kind: "error", title: e?.message ?? t("files.pickFailed"), body: e?.hint });
+        return;
+      }
       const ok = r.files.filter((f) => f.ok);
       const bad = r.files.filter((f) => !f.ok);
       if (bad.length) toast({ kind: "warning", title: t("files.skipped", { n: bad.length }), body: bad.map((b) => `${b.name}: ${b.error?.message}`).join("\n") });
@@ -68,14 +74,19 @@ export function useFileIntake({
       if (!list?.length) return;
       const form = new FormData();
       Array.from(list).forEach((f) => form.append("files", f));
-      const r = await api.upload<{ paths: string[] }>("/api/upload", form);
-      addPaths(r.paths);
+      try {
+        const r = await api.upload<{ paths: string[] }>("/api/upload", form);
+        addPaths(r.paths);
+      } catch (e: any) {
+        toast({ kind: "error", title: t("drop.uploadFailed"), body: e?.message });
+      }
     },
-    [addPaths],
+    [addPaths, toast, t],
   );
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
+      if (useApp.getState().page !== page) return;
       const target = e.target as HTMLElement;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
       const text = e.clipboardData?.getData("text") ?? "";
@@ -87,9 +98,10 @@ export function useFileIntake({
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [addPaths]);
+  }, [addPaths, page]);
 
   useKey("ctrl+o", (e) => {
+    if (useApp.getState().page !== page) return;
     e.preventDefault();
     pick();
   });

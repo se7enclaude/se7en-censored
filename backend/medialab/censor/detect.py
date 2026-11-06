@@ -340,7 +340,14 @@ def analyze(src: Path, video: dict, cache: Path, *, step: int = 1, mirror: bool 
         raise
     finally:
         reader.close()
-        th.join(timeout=5)
+        # le fil de décodage peut attendre une place dans la file : on la vide pour qu'il se termine
+        deadline = time.monotonic() + 5
+        while th.is_alive() and time.monotonic() < deadline:
+            try:
+                q.get(timeout=0.1)
+            except queue.Empty:
+                pass
+        th.join(timeout=1)
     frames_seen = max(total, last_idx + 1)
     meta = {**meta, "frames": frames_seen, "next": frames_seen, "done": True,
             "seconds": round(time.monotonic() - t0, 1), "gpu": detector.gpu}

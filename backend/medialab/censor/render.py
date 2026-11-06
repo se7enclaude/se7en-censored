@@ -3,6 +3,7 @@ copiés tels quels. Rendu intelligent (smart.py) quand c'est possible, sinon tou
 from __future__ import annotations
 
 import collections
+import glob
 import io
 import os
 import shutil
@@ -27,10 +28,25 @@ log = get_logger("censor")
 MP4_AUDIO = {"aac", "mp3", "ac3", "eac3", "alac", "opus", "flac"}
 
 
-def output_path(src: Path, out_dir: Path) -> Path:
+def output_path(src: Path, out_dir: Path, previous: str | None = None) -> Path:
+    """« <nom> (censuré) » ; un fichier du même nom qui n'est pas l'export précédent de ce projet (autre vidéo du même
+    nom, fichier à toi) n'est jamais écrasé : « (censuré 2) », « (censuré 3) »…"""
     ext = src.suffix.lower() if src.suffix.lower() in (".mkv", ".mp4", ".mov") else ".mp4"
     dst = out_dir / f"{src.stem} (censuré){ext}"
+    n = 2
+    while dst.exists() and not (previous and os.path.normcase(str(dst)) == os.path.normcase(previous)):
+        dst = out_dir / f"{src.stem} (censuré {n}){ext}"
+        n += 1
     return dst
+
+
+def leftovers(src: Path, out_dir: Path) -> list[Path]:
+    """Fichiers de travail d'un export interrompu (appli fermée de force, PC éteint) : vidéo partielle, image seule,
+    morceaux du rendu intelligent."""
+    stem = glob.escape(f"{src.stem} (censuré")
+    found = [*out_dir.glob(f"{stem}*).part.*"), *out_dir.glob(f"{stem}*).video.*"),
+             *out_dir.glob("." + glob.escape(f"{src.stem.replace('%', '_')} (censuré") + "*).morceaux")]
+    return found
 
 
 def export(src: Path, video: dict, fb: FrameBoxes, fps: float, frames: int, dst: Path, *, style: str, shape: str,
@@ -47,7 +63,7 @@ def export(src: Path, video: dict, fb: FrameBoxes, fps: float, frames: int, dst:
     # partir des minutes devant l'image dans le fichier, et les lecteurs n'avaient plus de son.
     subs = ["-map", "2:s?", "-c:s", "copy"] if mkv else []
     part = dst.with_name(f"{dst.stem}.part{dst.suffix}")
-    work_dir = dst.with_name(f".{dst.stem}.morceaux")
+    work_dir = dst.with_name(f".{dst.stem.replace('%', '_')}.morceaux")  # « % » : motif du muxer segment
     vid = dst.with_name(f"{dst.stem}.video{dst.suffix}")
     t0 = time.monotonic()
     why = "désactivé"
@@ -65,13 +81,18 @@ def export(src: Path, video: dict, fb: FrameBoxes, fps: float, frames: int, dst:
             stats["smart_skipped"] = why
             _mux(["-i", str(vid)], src, part, audio, subs, mkv, d, float(video.get("duration") or 0), cancel,
                  progress, start=0.95)
+        try:
+            os.replace(part, dst)
+        except PermissionError as e:
+            raise MediaLabError("permission_denied", f"Impossible de remplacer « {dst.name} ».",
+                                "Le fichier est sans doute ouvert dans un lecteur vidéo : ferme-le, puis exporte à "
+                                "nouveau.", True, str(e)) from e
     except BaseException:
         part.unlink(missing_ok=True)
         raise
     finally:
         vid.unlink(missing_ok=True)
         shutil.rmtree(work_dir, ignore_errors=True)
-    os.replace(part, dst)
     stats["seconds"] = round(time.monotonic() - t0, 1)
     log.info("Exported %s: %s", dst.name, stats)
     return {"file": str(dst), "size": dst.stat().st_size, "rendered_at": time.time(), **stats}
@@ -144,9 +165,10 @@ def full_encoders(d: dict, use_gpu: bool) -> list[tuple[str, list[str]]]:
     d = {**d, "codec": codec}
     ten = d.get("depth", 8) > 8
     out: list[tuple[str, list[str]]] = []
-    gpu = ffmpeg.best_encoder(codec) if use_gpu else None
+    gpu = ffmpeg.best_encoder("h265" if codec == "hevc" else codec) if use_gpu else None  # table : « h265 »
     hdr_meta = bool((d.get("hdr") or {}).get("mastering"))
-    if gpu and ffmpeg.is_hw(gpu) and not (codec == "h264" and ten) and not hdr_meta:
+    amf_8bit = bool(gpu) and gpu.endswith("_amf") and ten  # AMF n'écrit ici que du 8 bits
+    if gpu and ffmpeg.is_hw(gpu) and not (codec == "h264" and ten) and not hdr_meta and not amf_8bit:
         args = ffmpeg.encoder_args(gpu, 19 if gpu.endswith("_nvenc") else 18, ten_bit=ten)
         out.append((gpu, [*args, *S.color_args(d)]))
     out.append(("libx265" if codec == "hevc" else "libx264", S.cpu_encoder_args(d)))
@@ -212,7 +234,7 @@ def _encode(src: Path, d: dict, fps: float, frames: int, fb: FrameBoxes, part: P
             try:
                 proc.stdin.write(memoryview(fr))
             except (BrokenPipeError, OSError) as e:
-                raise _failure(proc, tail, enc) from e
+                raise _failure(proc, tail, enc, th) from e
             i += 1
             now = time.monotonic()
             if now - last_ui > 0.5:
@@ -234,17 +256,20 @@ def _encode(src: Path, d: dict, fps: float, frames: int, fb: FrameBoxes, part: P
     if cancel.is_set():
         raise Canceled()
     if proc.returncode != 0:
-        raise _failure(proc, tail, enc)
+        raise _failure(proc, tail, enc, th)
     log.info("Encoded %s: %d frames, %d blurred, %.0fs (%s)", part.name, i, blurred, time.monotonic() - t0, enc)
     return {"mode": "full", "frames": i, "blurred_frames": blurred, "reencoded_frames": i, "reencoded_share": 1.0,
             "encoder": enc}
 
 
-def _failure(proc: subprocess.Popen, tail: collections.deque, enc: str) -> MediaLabError:
+def _failure(proc: subprocess.Popen, tail: collections.deque, enc: str,
+             drain: threading.Thread | None = None) -> MediaLabError:
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+    if drain is not None:  # tout le message d'erreur, « disque plein » compris
+        drain.join(timeout=5)
     detail = "\n".join(tail)
     low = detail.lower()
     log.error("Export failed (%s): %s", enc, detail[-1500:])

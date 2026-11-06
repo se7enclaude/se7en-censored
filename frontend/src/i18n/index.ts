@@ -5,10 +5,9 @@ import { fr } from "./fr";
 export type Dict = Record<string, string>;
 export const dictionaries: Record<string, Dict> = { en, fr };
 
-export function resolveLang(pref?: string): "en" | "fr" {
-  if (pref === "en" || pref === "fr") return pref;
-  const nav = (navigator.language || "en").toLowerCase();
-  return nav.startsWith("fr") ? "fr" : "en";
+// se7en Censored n'existe qu'en français : la page Floutage n'est pas traduite
+export function resolveLang(_pref?: string): "en" | "fr" {
+  return "fr";
 }
 
 export function translate(lang: string, key: string, vars?: Record<string, string | number>): string {

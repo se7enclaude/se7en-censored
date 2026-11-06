@@ -182,8 +182,9 @@ export const useApp = create<AppState>((set, get) => ({
     get().setPage(target);
   },
   openInPlayer: (paths, index = 0) => {
-    set({ playerQueue: { paths, index, nonce: Date.now() } });
-    get().setPage("player");
+    // pas de lecteur intégré ici : la vidéo s'ouvre dans le lecteur de Windows
+    const path = paths[index] ?? paths[0];
+    if (path) api.post("/api/system/open", { path }).catch((e) => get().toast({ kind: "error", title: e.message, body: e.hint }));
   },
   consumeUrls: () => {
     const u = get().pendingUrls;
@@ -269,7 +270,7 @@ function onEvent(ev: AppEvent): void {
     }
     case "files_dropped":
       // "Open with se7en" -> play media; a drop on the window -> the tool on screen
-      if (ev.data?.paths?.length) s.sendFiles(ev.data.paths, ev.data.open ? "player" : undefined);
+      if (ev.data?.paths?.length) s.sendFiles(ev.data.paths, "censor");
       break;
     case "notify": {
       const st = s.settings;

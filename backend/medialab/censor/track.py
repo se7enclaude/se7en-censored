@@ -284,6 +284,7 @@ def manual_box(zone: dict, f: int) -> np.ndarray | None:
 
 
 WHOLE = np.array([0.0, 0.0, 1.0, 1.0], np.float32)
+BUCKET = 256  # images par tranche de l'index de FrameBoxes
 
 
 def clean_segments(segments: list[dict] | None) -> list[dict]:
@@ -314,6 +315,18 @@ class FrameBoxes:
         self.full = [(z["f0"], z["f1"]) for z in self.segments if z["mode"] == "full"]
         self.ai = [(z["f0"], z["f1"]) for z in self.segments if z["mode"] == "ai"]
         self.ai_outside = ai_outside
+        # index par tranches d'images : à chaque image, seules les pistes de sa tranche sont regardées (un film de
+        # 2 h a des milliers de pistes ; les reparcourir toutes à chaque image rendait l'export très lent)
+        self._buckets: dict[int, list[Track]] = {}
+        for t in self.tracks:  # déjà dans l'ordre de début : l'ordre est gardé dans chaque tranche
+            for k in range(t.f0 // BUCKET, t.f1 // BUCKET + 1):
+                self._buckets.setdefault(k, []).append(t)
+        # zones à la main : images clés triées une fois pour toutes
+        self._manual = []
+        for z in self.manual:
+            keys = sorted(z["keys"], key=lambda k: k["f"])
+            self._manual.append((keys[0]["f"], keys[-1]["f"], np.array([k["f"] for k in keys], np.float64),
+                                 np.array([k["box"] for k in keys], np.float32)))
 
     def ai_here(self, f: int) -> bool:
         return self.ai_outside or any(a <= f <= b for a, b in self.ai)
@@ -322,16 +335,18 @@ class FrameBoxes:
         if any(a <= f <= b for a, b in self.full):
             return [WHOLE]
         out = []
-        for t in self.tracks if self.ai_here(f) else ():
+        for t in self._buckets.get(f // BUCKET, ()) if self.ai_here(f) else ():
             if t.f0 > f:
                 break
+            if t.f1 < f:
+                continue
             bx = t.box_at(f)
             if bx is not None:
                 out.append(bx)
-        for z in self.manual:
-            bx = manual_box(z, f)
-            if bx is not None:
-                out.append(bx)
+        for a, b, fs, bs in self._manual:
+            if a <= f <= b:
+                out.append(bs[0].copy() if len(fs) == 1 else
+                           np.array([np.interp(f, fs, bs[:, j]) for j in range(4)], np.float32))
         return out
 
     def last_frame(self) -> int:

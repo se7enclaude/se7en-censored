@@ -60,8 +60,8 @@ async function request<T>(method: string, path: string, body?: unknown, init?: R
     throw new ApiError(
       {
         code: "backend_unreachable",
-        message: "Media Lab's engine is not responding.",
-        hint: "Restart the application. If it keeps happening, check the logs folder.",
+        message: "Le moteur de se7en Censored ne répond pas.",
+        hint: "Redémarre l'application. Si ça recommence, ouvre le Journal.",
         detail: String(e),
       },
       0,

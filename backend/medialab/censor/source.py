@@ -12,6 +12,7 @@ import numpy as np
 
 from ..components import CREATE_NO_WINDOW, require
 from ..errors import MediaLabError
+from ..media.ffmpeg import _rotation
 
 COLOR_KEYS = ("color_primaries", "color_transfer", "color_space", "color_range")
 
@@ -53,6 +54,8 @@ def describe(src: Path) -> dict:
         "chroma": "420" if "420" in pix or pix in ("nv12", "p010le") else "422" if "422" in pix else "444"
         if "444" in pix else "other",
         "full_range": st.get("color_range") == "pc" or pix.startswith("yuvj"),
+        # FFmpeg tourne l'image au décodage : les images reçues ont les dimensions affichées, pas celles du flux
+        "rotation": _rotation(st),
         "width": st.get("width"), "height": st.get("height"),
         "r_frame_rate": st.get("r_frame_rate"), "avg_frame_rate": st.get("avg_frame_rate"),
         "fps": _ratio(st.get("avg_frame_rate")) or _ratio(st.get("r_frame_rate")),
@@ -63,6 +66,8 @@ def describe(src: Path) -> dict:
         "hdr": hdr_metadata(src),
         "tags": {k: tags[k] for k in ("language", "title") if tags.get(k)},  # étiquettes de la piste vidéo
     }
+    if abs(d["rotation"]) % 180 == 90:
+        d["width"], d["height"] = d["height"], d["width"]
     if d["color_range"] is None and pix.startswith("yuvj"):
         d["color_range"] = "pc"
     return d

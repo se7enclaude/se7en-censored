@@ -202,8 +202,8 @@ def _main(argv: list[str] | None = None) -> int:
                     from . import preflight
                     if preflight.ask(preflight.tr(
                         "Des fichiers de se7en sont manquants (une mise à jour a été interrompue).\n\n"
-                        "se7en s'ouvre dans votre navigateur en attendant.\n\n"
-                        "Télécharger l'installateur pour réparer se7en ? Vos fichiers et réglages sont conservés.",
+                        "se7en s'ouvre dans ton navigateur en attendant.\n\n"
+                        "Télécharger l'installateur pour réparer se7en ? Tes projets et tes réglages sont gardés.",
                         "Some se7en files are missing (an update was interrupted).\n\n"
                         "se7en opens in your web browser meanwhile.\n\n"
                         "Download the installer to repair se7en? Your files and settings are kept.",
@@ -213,8 +213,8 @@ def _main(argv: list[str] | None = None) -> int:
                     from . import preflight
                     preflight.message(preflight.tr(
                         "La fenêtre de se7en n'a pas pu s'ouvrir sur ce PC.\n\n"
-                        "se7en s'ouvre dans votre navigateur à la place : tout fonctionne de la même façon.\n\n"
-                        "Pour retrouver la fenêtre, installez « Microsoft Edge WebView2 Runtime ».",
+                        "se7en s'ouvre dans ton navigateur à la place : tout fonctionne de la même façon.\n\n"
+                        "Pour retrouver la fenêtre, installe « Microsoft Edge WebView2 Runtime ».",
                         "The se7en window could not open on this PC.\n\n"
                         "se7en opens in your web browser instead: everything works the same.\n\n"
                         "To get the window back, install \"Microsoft Edge WebView2 Runtime\".",

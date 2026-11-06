@@ -27,7 +27,8 @@
 .cz-timeline { position: relative; height: 26px; margin: 4px 14px 14px; border-radius: 8px; background: rgba(255, 255, 255, 0.14); border: 1px solid rgba(255, 255, 255, 0.28); cursor: pointer; overflow: hidden; }
 [data-theme="light"] .cz-timeline { background: rgba(11, 17, 18, 0.12); border-color: rgba(11, 17, 18, 0.12); }
 .cz-mark { position: absolute; top: 4px; bottom: 4px; border-radius: 3px; opacity: 0.95; pointer-events: none; }
-.cz-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); pointer-events: none; }
+.cz-head { position: absolute; top: -2px; bottom: -2px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1.5px #000, 0 0 6px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 1; }
+.cz-timeline:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .cz-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .cz-chip { border: 1px solid var(--border-default); background: var(--surface-glass-light); color: inherit; border-radius: 99px; padding: 4px 12px; font: 600 12px/1.4 var(--font-sans); cursor: pointer; }

@@ -82,6 +82,11 @@ def check(d: dict, pk: dict, fps: float, frames: int) -> tuple[str | None, list[
         return f"format d'image {d.get('pix_fmt')} non pris en charge", []
     if d.get("field_order") not in ("progressive", "unknown"):
         return "vidéo entrelacée", []
+    if d.get("rotation"):
+        # les morceaux copiés perdraient l'indication de rotation et sortiraient couchés
+        return "vidéo tournée (filmée au téléphone)", []
+    if (d.get("width") or 0) % 2 or (d.get("height") or 0) % 2:
+        return "dimensions impaires", []
     if abs(d.get("start", 0) - d.get("file_start", 0)) > 0.5 / fps:
         return "l'image ne commence pas avec le fichier", []
     pts, key = pk["pts"], pk["key"]
@@ -102,6 +107,8 @@ def check(d: dict, pk: dict, fps: float, frames: int) -> tuple[str | None, list[
         if (pts[p + 1:end] < pts[p] - 1e-6).any():
             return "groupes d'images ouverts (open GOP)", []
     idx = np.rint((pts[kpos] - order[0]) * fps).astype(int)
+    if 0 not in idx:
+        return "la vidéo ne commence pas par une image-clé", []
     return None, sorted(set(int(i) for i in idx))
 
 
@@ -125,6 +132,8 @@ def run(src: Path, d: dict, fb: FrameBoxes, fps: float, frames: int, vid_dir: Pa
             "-reset_timestamps", "0", "-segment_list", str(listing), "-segment_list_type", "csv"]
     if times:
         args += ["-segment_times", times]
+    else:  # rien à réencoder : un seul morceau (sans ça, le muxer coupe toutes les 2 s)
+        args += ["-segment_time", "100000000"]
     ffmpeg.run([*args, str(vid_dir / "p%05d.ts")], duration=float(frames / fps), cancel=cancel,
                label="Découpe de la vidéo", on_progress=lambda f, _: progress(0.3 * f, "Découpe de la vidéo", None))
     parts = sorted(vid_dir.glob("p*.ts"))

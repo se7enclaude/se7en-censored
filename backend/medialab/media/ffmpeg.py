@@ -59,10 +59,11 @@ def probe(path: str | Path) -> dict:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
                              creationflags=CREATE_NO_WINDOW, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired as e:
-        raise MediaLabError("probe_failed", "Analyzing the file took too long.", "The file may be damaged.", True) from e
+        raise MediaLabError("probe_failed", "La lecture du fichier a pris trop de temps.", "Le fichier est peut-être abîmé.",
+                            True) from e
     if out.returncode != 0:
-        raise MediaLabError("probe_failed", "This file could not be read as a media file.",
-                            "Check that the file is a valid image or video.", False, out.stderr[-2000:])
+        raise MediaLabError("probe_failed", "Ce fichier ne se lit pas comme une vidéo.",
+                            "Vérifie que c'est bien une vidéo, et qu'elle n'est pas abîmée.", False, out.stderr[-2000:])
     data = json.loads(out.stdout or "{}")
     fmt = data.get("format", {})
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"

@@ -114,13 +114,15 @@ def test_vram_tiles():
     assert planning.reduce_tile(64, 3) == 32
 
 
-def test_settings_migration_switches_to_the_glass_light_theme():
-    # 1.3: the red "liquid glass" light look replaces the old dark default; an explicit "system" choice is kept
-    from medialab.settings import SETTINGS_VERSION, _migrate
-    assert _migrate({"version": 2, "general": {"theme": "dark"}})["general"]["theme"] == "light"
-    assert _migrate({"version": 2, "general": {"theme": "system"}})["general"]["theme"] == "system"
-    assert _migrate({"version": 2, "general": {"theme": "dark"}})["version"] == SETTINGS_VERSION
-    assert _migrate({"version": SETTINGS_VERSION, "general": {"theme": "dark"}})["general"]["theme"] == "dark"
+def test_settings_migration_switches_to_the_dark_theme_once():
+    # se7en Censored 1.4: dark is imposed once on every install, then the user's choice is kept
+    from medialab.settings import SETTINGS_VERSION, Settings, _migrate
+    assert Settings().general.theme == "dark"
+    assert _migrate({"version": 3, "general": {"theme": "light"}})["general"]["theme"] == "dark"
+    assert _migrate({"version": 3, "general": {"theme": "system"}})["general"]["theme"] == "dark"
+    assert _migrate({"version": 2})["general"]["theme"] == "dark"
+    assert _migrate({"version": 3})["version"] == SETTINGS_VERSION
+    assert _migrate({"version": SETTINGS_VERSION, "general": {"theme": "light"}})["general"]["theme"] == "light"
 
 
 def test_a_windowless_instance_is_not_taken_for_the_open_app(data_dir, monkeypatch):

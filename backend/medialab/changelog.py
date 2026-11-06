@@ -2,6 +2,23 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.4.0": {
+        "fr": ["Mode sombre par défaut (changeable dans Réglages › Général).",
+               "Vidéos filmées au téléphone (en portrait) : l'export garde une image droite et nette.",
+               "Un export ne remplace plus jamais un autre fichier du même nom ; un export interrompu ne laisse plus "
+               "de fichiers de travail.",
+               "Plus sûr : supprimer un projet demande confirmation, les réglages changés juste avant l'export sont "
+               "bien pris, et les raccourcis de la vérification ne s'activent plus depuis les autres onglets.",
+               "Plus rapide : export des longs films, aperçu des images, export sur la carte graphique pour les "
+               "vidéos HEVC."],
+        "en": ["Dark mode by default (change it in Settings › General).",
+               "Phone videos (portrait): the export keeps an upright, clean picture.",
+               "An export never replaces another file with the same name; an interrupted export no longer leaves "
+               "work files behind.",
+               "Safer: deleting a project asks first, settings changed right before exporting are used, and review "
+               "shortcuts no longer fire from other tabs.",
+               "Faster: long films export faster, frame previews are quicker, and HEVC videos export on the GPU."],
+    },
     "1.3.1": {
         "fr": ["Analyser seulement des passages : en ajoutant une vidéo, choisis « Seulement des passages » et "
                "colle les timecodes (ou ouvre un fichier, une capture d'écran). L'IA ne vérifie que ces passages, "

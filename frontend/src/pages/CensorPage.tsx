@@ -3,7 +3,7 @@ import { ArrowLeft, Check as CheckIcon, ChevronLeft, ChevronRight, Eye, EyeOff, 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, localMediaUrl, mediaUrl } from "../api/client";
 import { events } from "../api/ws";
-import { Button, Empty, ErrorAlert, PageHead, Progress, Segmented, Switch, Ticks } from "../components/ui";
+import { Button, Empty, ErrorAlert, Modal, PageHead, Progress, Segmented, Switch, Ticks } from "../components/ui";
 import { useFileIntake } from "../hooks/useFileIntake";
 import { duration as fmtDuration } from "../lib/format";
 import { useApp } from "../store/app";
@@ -125,6 +125,15 @@ const isPath = (s: string) => /^([A-Za-z]:\\|\\\\)[^<>|*?]+\.\w{2,5}$/.test(clea
 const isSource = (s: string) => isUrl(s) || isPath(s);
 const fileName = (s: string) => cleanPath(s).split(/[\\/]/).pop() ?? s;
 const running = (s: string) => s === "queued" || s === "analyzing";
+const host = (u: string) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return "lien";
+  }
+};
+// les raccourcis de la vérification ne valent que sur la page Floutage, sans fenêtre ouverte par-dessus
+const reviewKeysActive = () => useApp.getState().page === "censor" && !document.querySelector(".modal-backdrop");
 
 function eta(sec: number | null | undefined) {
   if (sec == null || !isFinite(sec) || sec <= 0) return "";
@@ -156,9 +165,19 @@ export function CensorPage() {
       if (ev.type === "censor_progress") {
         const d = ev.data;
         setLive((l) => ({ ...l, [d.project]: { percent: d.percent, label: d.label, eta: d.eta, op: d.op } }));
-      } else if (ev.type === "censor_project") refresh();
+      } else if (ev.type === "censor_project") {
+        const id = ev.data?.project;
+        if (id) setLive((l) => { const { [id]: _, ...rest } = l; return rest; });
+        refresh();
+      }
     });
   }, [refresh]);
+  const connected = useApp((s) => s.connected);
+  useEffect(() => { if (connected) refresh(); }, [connected, refresh]);
+
+  // une vidéo déposée ou ouverte avec se7en pendant qu'un projet est ouvert : retour à la liste pour la recevoir
+  const incoming = useApp((s) => (s.pendingFilesPage === "censor" && s.pendingFiles?.length) || s.pendingUrls?.length);
+  useEffect(() => { if (incoming) setOpenId(null); }, [incoming]);
 
   if (openId) return <ProjectView id={openId} live={live[openId]} onBack={() => { setOpenId(null); refresh(); }} />;
 
@@ -185,7 +204,7 @@ export function CensorPage() {
                 <div className="clip-project-body">
                   <div className="ellipsis" style={{ fontWeight: 600 }} title={p.name}>{p.name}</div>
                   <div className="mono faint" style={{ fontSize: 11 }}>
-                    {[p.duration ? fmtDuration(p.duration) : null, p.url ? new URL(p.url).hostname.replace(/^www\./, "") : "fichier", p.zones != null ? `${p.zones} zones` : null].filter(Boolean).join(" · ")}
+                    {[p.duration ? fmtDuration(p.duration) : null, p.url ? host(p.url) : "fichier", p.zones != null ? `${p.zones} zones` : null].filter(Boolean).join(" · ")}
                   </div>
                   {running(p.status) || p.status === "exporting" ? (
                     <div style={{ marginTop: 8 }}>
@@ -246,7 +265,8 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
     kind: "video",
     onFiles: (fs) => {
       const vids = fs.filter((f) => f.kind === "video");
-      if (vids.length === 1) setSource(vids[0].path);
+      if (!vids.length) onError({ message: "Ce n'est pas une vidéo", hint: "se7en Censored floute des vidéos (mp4, mkv, mov…)." });
+      else if (vids.length === 1) setSource(vids[0].path);
       else vids.forEach((v) => create(v.path));
     },
   });
@@ -273,7 +293,7 @@ function NewProject({ onCreated, onError }: { onCreated: (p: Project) => void; o
           onChange={(e) => setSource(e.target.value)}
           onFocus={(e) => { setTyping(true); if (local) e.target.select(); }}
           onBlur={() => setTyping(false)}
-          onKeyDown={(e) => e.key === "Enter" && ready && create(source)}
+          onKeyDown={(e) => e.key === "Enter" && ready && !sending && create(source)}
           spellCheck={false}
         />
         <Button variant={local ? "ghost" : "outline"} icon={<Upload size={15} />} onClick={intake.pick}>
@@ -347,12 +367,29 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
     });
   }, [id, load]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const [busy, setBusy] = useState<string | null>(null);
+  const act = async (what: string, fn: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(what);
     try {
       await fn();
       load();
     } catch (e: any) {
       toast({ kind: "error", title: e.message, body: e.hint });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const remove = async () => {
+    setBusy("delete");
+    try {
+      await api.del(`/api/censor/projects/${id}`);
+      setConfirmDelete(false);
+      onBack();
+    } catch (e: any) {
+      toast({ kind: "error", title: e.message, body: e.hint });
+      setBusy(null);
     }
   };
 
@@ -374,12 +411,12 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
         right={
           <>
             {analyzing || exporting ? (
-              <Button icon={<Square size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/cancel`))}>Arrêter</Button>
+              <Button icon={<Square size={14} />} loading={busy === "cancel"} onClick={() => act("cancel", () => api.post(`/api/censor/projects/${id}/cancel`))}>Arrêter</Button>
             ) : (
               <>
-                {p.export?.file && <Button icon={<FolderOpen size={15} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/open-folder`))}>Dossier</Button>}
+                {p.export?.file && <Button icon={<FolderOpen size={15} />} onClick={() => act("folder", () => api.post(`/api/censor/projects/${id}/open-folder`))}>Dossier</Button>}
                 {(p.status === "paused" || p.status === "error") && (
-                  <Button variant="primary" icon={<RefreshCw size={15} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>{p.status === "paused" ? "Reprendre l'analyse" : "Relancer"}</Button>
+                  <Button variant="primary" icon={<RefreshCw size={15} />} loading={busy === "analyze"} onClick={() => act("analyze", () => api.post(`/api/censor/projects/${id}/analyze`))}>{p.status === "paused" ? "Reprendre l'analyse" : "Relancer"}</Button>
                 )}
               </>
             )}
@@ -388,7 +425,7 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
               iconOnly
               icon={<Trash2 size={15} />}
               tip="Supprimer le projet (la vidéo exportée reste dans son dossier)"
-              onClick={() => act(async () => { await api.del(`/api/censor/projects/${id}`); onBack(); })}
+              onClick={() => setConfirmDelete(true)}
             />
           </>
         }
@@ -414,7 +451,7 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
             <span className="mono faint">{live?.op === "analyze" ? eta(live.eta) : ""}</span>
           </div>
           <p className="faint" style={{ marginTop: 14, fontSize: 12 }}>
-            Vous pouvez arrêter et reprendre plus tard : l'analyse repart là où elle s'était arrêtée.
+            Tu peux arrêter et reprendre plus tard : l'analyse repart là où elle s'était arrêtée.
           </p>
         </div>
       )}
@@ -423,25 +460,25 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
       {reviewable && p.detect && (p.detect.v ?? 1) < 2 && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Analysé avec une version précédente : relance l'analyse pour profiter du suivi visuel des zones (moins de trous dans le flou). Tes zones à la main sont gardées.</span>
-          <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Réanalyser</Button>
+          <Button size="sm" variant="primary" icon={<RefreshCw size={14} />} loading={busy === "analyze"} onClick={() => act("analyze", () => api.post(`/api/censor/projects/${id}/analyze`))}>Réanalyser</Button>
         </div>
       )}
       {reviewable && p.detect && (p.detect.v ?? 1) >= 2 && !p.detect.refined && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Nouveau : la 2e passe revoit les moments où l'IA a vu de la nudité. Elle écarte ce qui n'en est pas (pecs, verre, bras), trouve les parties petites ou lointaines et coupe les zones aux changements de plan. Quelques minutes, sans refaire l'analyse ; tes zones à la main sont gardées.</span>
-          <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Lancer la 2e passe</Button>
+          <Button size="sm" variant="primary" icon={<ShieldCheck size={14} />} loading={busy === "analyze"} onClick={() => act("analyze", () => api.post(`/api/censor/projects/${id}/analyze`))}>Lancer la 2e passe</Button>
         </div>
       )}
       {reviewable && zones?.scope_only && !(zones.unanalysed ?? 0) && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Seuls tes passages ont été analysés (en violet sur la frise). Ajoute d'autres passages plus bas, ou analyse toute la vidéo : ce qui est déjà fait est gardé.</span>
-          <Button size="sm" variant="outline" icon={<RefreshCw size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze?all=1`))}>Analyser toute la vidéo</Button>
+          <Button size="sm" variant="outline" icon={<RefreshCw size={14} />} loading={busy === "analyze"} onClick={() => act("analyze", () => api.post(`/api/censor/projects/${id}/analyze?all=1`))}>Analyser toute la vidéo</Button>
         </div>
       )}
       {reviewable && (zones?.unanalysed ?? 0) > 0 && (
         <div className="clip-hint" style={{ marginBottom: 12 }}>
           <span>Des passages « Zones IA » n'ont pas encore été analysés ({fmtDuration((zones!.unanalysed ?? 0) / (zones!.fps || 25))}) : l'IA n'y a rien cherché.</span>
-          <Button size="sm" variant="primary" icon={<WandSparkles size={14} />} onClick={() => act(() => api.post(`/api/censor/projects/${id}/analyze`))}>Analyser ces passages</Button>
+          <Button size="sm" variant="primary" icon={<WandSparkles size={14} />} loading={busy === "analyze"} onClick={() => act("analyze", () => api.post(`/api/censor/projects/${id}/analyze`))}>Analyser ces passages</Button>
         </div>
       )}
       {p.notes?.map((n) => (
@@ -449,6 +486,22 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
       ))}
 
       {reviewable && p.video && zones && <Review project={p} zones={zones} live={live} exporting={exporting} onChange={load} onError={(e) => toast({ kind: "error", title: e.message, body: e.hint })} />}
+
+      <Modal
+        open={confirmDelete}
+        onClose={() => busy !== "delete" && setConfirmDelete(false)}
+        eyebrow="Supprimer"
+        title="Supprimer ce projet ?"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>Annuler</Button>
+            <Button variant="primary" icon={<Trash2 size={15} />} loading={busy === "delete"} onClick={remove}>Supprimer</Button>
+          </>
+        }
+      >
+        {analyzing || exporting ? "L'analyse ou l'export en cours sera arrêté. " : ""}
+        L'analyse, tes zones à la main et tes passages seront perdus. La vidéo d'origine et la vidéo exportée restent dans leur dossier.
+      </Modal>
     </div>
   );
 }
@@ -475,7 +528,8 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   const H = p.video!.height;
   const visible = useMemo(() => z.tracks.filter((t) => !t.hidden), [z.tracks]);
 
-  useEffect(() => setOpts(p.options), [p.options]);
+  const pendingOpts = useRef<Partial<Options>>({});
+  useEffect(() => setOpts({ ...p.options, ...pendingOpts.current }), [p.options]);
 
   // la vidéo pilote le numéro d'image ; sans lecture possible (codec), on avance image par image
   useEffect(() => {
@@ -549,11 +603,33 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   }, [frame, playing, fxKey, visible, p.id]);
 
   const saveOpts = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const setOpt = <K extends keyof Options>(k: K, v: Options[K]) => {
-    const next = { ...opts, [k]: v };
-    setOpts(next);
+  const flushOpts = useCallback(async () => {
     clearTimeout(saveOpts.current);
-    saveOpts.current = setTimeout(() => api.patch(`/api/censor/projects/${p.id}/options`, { [k]: v }).then(onChange).catch(onError), 300);
+    const patch = pendingOpts.current;
+    if (!Object.keys(patch).length) return;
+    pendingOpts.current = {};
+    await api.patch(`/api/censor/projects/${p.id}/options`, patch);
+  }, [p.id]);
+  const setOpt = <K extends keyof Options>(k: K, v: Options[K]) => {
+    setOpts((o) => ({ ...o, [k]: v }));
+    pendingOpts.current = { ...pendingOpts.current, [k]: v };
+    clearTimeout(saveOpts.current);
+    saveOpts.current = setTimeout(() => flushOpts().then(onChange).catch(onError), 300);
+  };
+  // en quittant le projet, rien ne se perd
+  useEffect(() => () => { flushOpts().catch(() => undefined); }, [flushOpts]);
+  const [exportSending, setExportSending] = useState(false);
+  const startExport = async () => {
+    setExportSending(true);
+    try {
+      await flushOpts();
+      await api.post(`/api/censor/projects/${p.id}/export`);
+      onChange();
+    } catch (e) {
+      onError(e);
+    } finally {
+      setExportSending(false);
+    }
   };
 
   const boxesAt = (f: number) => {
@@ -674,6 +750,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   // raccourcis clavier de la vérification (sauf pendant la saisie dans un champ)
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keys.current = (e: KeyboardEvent) => {
+    if (!reviewKeysActive()) return;
     const el = e.target as HTMLElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
@@ -702,6 +779,10 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       }
     }
   };
+  const page = useApp((s) => s.page);
+  useEffect(() => {
+    if (page !== "censor") videoRef.current?.pause();
+  }, [page]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => keys.current(e);
     window.addEventListener("keydown", h);
@@ -769,7 +850,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           {p.manual.length > 0 ? (
             <div className="cz-chips">
               {p.manual.map((m, i) => (
-                <button key={m.id} className={clsx("cz-chip", m.id === selected && "on")} onClick={() => { setSelected(m.id); seek(m.keys[0].f); }}>
+                <button key={m.id} className={clsx("cz-chip", m.id === selected && "on")} aria-pressed={m.id === selected} onClick={() => { setSelected(m.id); seek(m.keys[0].f); }}>
                   Zone {i + 1}{m.fixed ? " · fixe" : ""} · {clock(m.keys[0].f / fps)} → {clock(m.keys[m.keys.length - 1].f / fps)}
                 </button>
               ))}
@@ -811,7 +892,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               </div>
             </div>
           ) : (
-            <Button variant="primary" full icon={<ShieldCheck size={16} />} style={{ marginTop: 14 }} onClick={() => api.post(`/api/censor/projects/${p.id}/export`).then(onChange).catch(onError)}>
+            <Button variant="primary" full icon={<ShieldCheck size={16} />} style={{ marginTop: 14 }} loading={exportSending} onClick={startExport}>
               {p.export?.file ? "Exporter à nouveau" : "Exporter la vidéo floutée"}
             </Button>
           )}
@@ -837,7 +918,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
             {CLASSES.map((c) => {
               const on = opts.classes.includes(c.id);
               return (
-                <button key={c.id} className={clsx("cz-class", on && "on")} onClick={() => setOpt("classes", on ? opts.classes.filter((x) => x !== c.id) : [...opts.classes, c.id])}>
+                <button key={c.id} className={clsx("cz-class", on && "on")} aria-pressed={on} onClick={() => setOpt("classes", on ? opts.classes.filter((x) => x !== c.id) : [...opts.classes, c.id])}>
                   <span className="cz-dot" style={{ background: CLASS_COLOR[c.id] }} />
                   {c.label}
                 </button>
@@ -921,7 +1002,7 @@ function Range({ label, left, right, value, min, max, onChange }: { label: strin
         <span className="spacer" />
         <span className="mono faint">{value}</span>
       </div>
-      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ ["--pct" as any]: `${((value - min) / (max - min)) * 100}%` }} />
+      <input type="range" aria-label={label} min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ ["--pct" as any]: `${((value - min) / (max - min)) * 100}%` }} />
       <div className="row faint cz-range-ends">
         <span>{left}</span>
         <span className="spacer" />
@@ -941,6 +1022,12 @@ function Timeline({ marks, total, frame, onSeek }: { marks: { f0: number; f1: nu
     <div
       className="cz-timeline"
       ref={ref}
+      role="slider"
+      tabIndex={0}
+      aria-label="Frise de la vidéo"
+      aria-valuemin={0}
+      aria-valuemax={Math.max(0, total - 1)}
+      aria-valuenow={frame}
       onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture(e.pointerId); at(e); }}
       onPointerMove={(e) => e.buttons === 1 && at(e)}
     >

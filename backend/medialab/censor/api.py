@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from pathlib import Path
 
@@ -103,26 +104,38 @@ def make_worker(settings):
                     "format": f"{(project.get('stats') or {}).get('zones', 0)} zones",
                     "duration": (project.get("video") or {}).get("duration"), "meta": {"project": pid}}
         except Canceled:
-            P.patch(pid, {"status": "paused" if op == "analyze" else "review", "step": None})
-            bus.publish("censor_project", {"project": pid})
+            if P.exists(pid):
+                P.patch(pid, {"status": "paused" if op == "analyze" else "review", "step": None})
+                bus.publish("censor_project", {"project": pid})
             raise
         except MediaLabError as e:
-            P.patch(pid, {"status": "error" if op == "analyze" else "review", "step": None,
-                          "error": {"code": e.code, "message": e.message, "hint": e.hint}})
-            bus.publish("censor_project", {"project": pid})
+            if not P.exists(pid):  # projet supprimé pendant la tâche : simple arrêt, pas une erreur
+                raise Canceled() from None
+            _failed(pid, op, {"code": e.code, "message": e.message, "hint": e.hint})
             raise
         except Exception as e:
+            if not P.exists(pid):
+                raise Canceled() from None
             log.exception("Censor job failed")
-            P.patch(pid, {"status": "error" if op == "analyze" else "review", "step": None,
-                          "error": {"message": str(e), "hint": "Voir le journal."}})
-            bus.publish("censor_project", {"project": pid})
+            _failed(pid, op, {"message": str(e), "hint": "Voir le journal."})
             raise
     return worker
+
+
+def _failed(pid: str, op: str, error: dict) -> None:
+    P.patch(pid, {"status": "error" if op == "analyze" else "review", "step": None, "error": error})
+    bus.publish("censor_project", {"project": pid})
+
+
+ACTIVE_JOBS = ("waiting", "analyzing", "downloading", "processing")
 
 
 def register(app: FastAPI, S) -> None:
     def start(pid: str, op: str) -> dict:
         project = P.load(pid)
+        if project.get("status") in ("queued", "analyzing", "exporting") and _job_active(project):
+            raise MediaLabError("busy", "Une analyse ou un export est déjà en cours sur ce projet.",
+                                "Attends qu'il finisse, ou arrête-le.")
         src = project["source"].get("path") or project["source"].get("url") or ""
         P.patch(pid, {"status": "queued" if op == "analyze" else "exporting", "error": None})
         job = S.jobs.add("censor", src, {"op": op, "project": pid}, title=project["name"], platform="censor")
@@ -130,12 +143,39 @@ def register(app: FastAPI, S) -> None:
         bus.publish("censor_project", {"project": pid})
         return job
 
+    def _job_active(project: dict) -> bool:
+        try:
+            return bool(project.get("job")) and S.jobs.get(project["job"]).get("status") in ACTIVE_JOBS
+        except MediaLabError:
+            return False
+
+    def recover() -> None:
+        """Au lancement : un projet resté « en cours » (appli fermée pendant une analyse ou un export) redevient
+        reprenable, et les fichiers de travail d'un export interrompu sont effacés."""
+        for item in P.listing():
+            if item.get("status") not in ("queued", "analyzing", "exporting"):
+                continue
+            try:
+                project = P.load(item["id"])
+                if _job_active(project):
+                    continue
+                exporting = project.get("status") == "exporting"
+                P.patch(project["id"], {"status": "review" if exporting else "paused", "step": None})
+                if exporting and project["source"].get("path"):
+                    for f in render.leftovers(Path(project["source"]["path"]), P.output_dir(project)):
+                        shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
+                        log.info("Removed leftover of an interrupted export: %s", f)
+            except Exception:  # noqa: BLE001 - un projet abîmé ne doit pas empêcher le lancement
+                log.exception("Could not recover censor project %s", item.get("id"))
+
     def cancel_job(project: dict) -> None:
         if project.get("job"):
             try:
                 S.jobs.cancel(project["job"])
             except MediaLabError:
                 pass
+
+    recover()
 
     @app.get("/api/censor/catalog")
     async def catalog():
@@ -179,7 +219,8 @@ def register(app: FastAPI, S) -> None:
 
     @app.delete("/api/censor/projects/{pid}")
     async def delete(pid: str):
-        cancel_job(P.load(pid))
+        project = P.load(pid)
+        cancel_job(project)
         P.delete(pid)
         return {"ok": True}
 
@@ -209,9 +250,10 @@ def register(app: FastAPI, S) -> None:
             if "classes" in changes:
                 changes["classes"] = [c for c in changes["classes"] if c in T.CLASS_IDS]
             project["options"] = {**project["options"], **changes}
+            out = {"options": project["options"]}
             if project.get("status") in ("review", "done"):
-                project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
-            return P.save(project)
+                out["stats"] = {**(project.get("stats") or {}), **_cov(project)}
+            return P.patch(pid, out)
         return await run_in_threadpool(run)
 
     def _cov(project: dict) -> dict:
@@ -246,8 +288,7 @@ def register(app: FastAPI, S) -> None:
                     clean.append(zone)
             project = P.load(pid)
             project["manual"] = clean
-            project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
-            return P.save(project)
+            return P.patch(pid, {"manual": clean, "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
 
     def _timing(project: dict) -> tuple[float, int]:
@@ -298,8 +339,7 @@ def register(app: FastAPI, S) -> None:
                 clean.append({"id": str(z.get("id") or i), "f0": z["f0"], "f1": f1, "mode": z["mode"],
                               "label": str(z.get("label") or "")[:200]})
             project["segments"] = clean
-            project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
-            return P.save(project)
+            return P.patch(pid, {"segments": clean, "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
 
     @app.post("/api/censor/projects/{pid}/follow")
@@ -319,8 +359,8 @@ def register(app: FastAPI, S) -> None:
             if t is None:
                 raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
             project["hidden"] = [*(project.get("hidden") or []), {"cls": t.cls, "f0": t.f0, "f1": t.f1}]
-            project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
-            return P.save(project)
+            return P.patch(pid, {"hidden": project["hidden"],
+                                 "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
 
     @app.post("/api/censor/projects/{pid}/unhide")
@@ -331,8 +371,7 @@ def register(app: FastAPI, S) -> None:
             if 0 <= body.index < len(hidden):
                 hidden.pop(body.index)
             project["hidden"] = hidden
-            project["stats"] = {**(project.get("stats") or {}), **_cov(project)}
-            return P.save(project)
+            return P.patch(pid, {"hidden": hidden, "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
 
     @app.get("/api/censor/projects/{pid}/frame")
@@ -364,6 +403,8 @@ def register(app: FastAPI, S) -> None:
     @app.post("/api/censor/projects/{pid}/export")
     async def export(pid: str):
         project = P.load(pid)
+        if project.get("status") == "exporting" and _job_active(project):
+            raise MediaLabError("busy", "L'export est déjà en cours.")
         if project.get("status") not in ("review", "done"):
             raise MediaLabError("not_analyzed", "Attends la fin de l'analyse.")
         return {"job": start(pid, "export")}

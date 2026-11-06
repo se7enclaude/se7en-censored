@@ -19,11 +19,12 @@ import {
   Sparkles,
   Star,
   Trash2,
+  ShieldCheck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, thumbUrl } from "../api/client";
 import type { Job } from "../api/types";
-import { Badge, Button, Empty, ErrorAlert, PageHead, PlatformChip, Progress, Segmented, StatusBadge, Thumb } from "../components/ui";
+import { Badge, Button, Empty, ErrorAlert, PageHead, PlatformChip, Progress, StatusBadge, Thumb } from "../components/ui";
 import { useT } from "../i18n";
 import { bytes, eta, speed } from "../lib/format";
 import { useApp } from "../store/app";
@@ -36,7 +37,7 @@ export function QueuePage() {
   const t = useT();
   const jobs = useApp((s) => s.jobs);
   const toast = useApp((s) => s.toast);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter] = useState<Filter>("all");
 
   const list = useMemo(
     () =>
@@ -61,16 +62,6 @@ export function QueuePage() {
         title={t("queue.title")}
         right={
           <>
-            <Segmented<Filter>
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { value: "all", label: t("queue.filter.all") },
-                { value: "download", label: t("queue.filter.download") },
-                { value: "upscale", label: t("queue.filter.upscale") },
-                { value: "tools", label: t("queue.filter.tools") },
-              ]}
-            />
           </>
         }
       />
@@ -141,6 +132,8 @@ export function JobRow({ job: j, index }: { job: Job; index: number }) {
             ? o.op === "separate"
               ? [t("studio.separate"), t(`studio.stems.${o.stems || "both"}`)]
               : [t("studio.clean"), t(`studio.sound.${o.sound || "voice"}`), t(`studio.strength.${o.strength || "medium"}`)]
+          : j.kind === "censor"
+            ? [o.op === "export" ? "export" : "analyse"]
           : [
               Number(o.scale) === 1 && !o.width ? null : o.model,
               Number(o.scale) === 1 && !o.width ? null : o.width ? `${o.width}×${o.height}` : `×${o.scale}`,
@@ -149,7 +142,7 @@ export function JobRow({ job: j, index }: { job: Job; index: number }) {
               o.colorize ? t("tool.colorize") : null,
               o.interpolate ? `${t("tool.interpolate")} ${String(o.interpolate).length > 1 ? `${o.interpolate} fps` : `×${o.interpolate}`}` : null,
             ];
-  const kindIcon = j.kind === "upscale" ? <Sparkles size={18} /> : j.kind === "convert" ? <RefreshCcw size={18} /> : j.kind === "trim" ? <Scissors size={18} /> : j.kind === "studio" ? <AudioLines size={18} /> : j.kind === "subtitles" ? <Captions size={18} /> : <Download size={18} />;
+  const kindIcon = j.kind === "upscale" ? <Sparkles size={18} /> : j.kind === "convert" ? <RefreshCcw size={18} /> : j.kind === "trim" ? <Scissors size={18} /> : j.kind === "studio" ? <AudioLines size={18} /> : j.kind === "subtitles" ? <Captions size={18} /> : j.kind === "censor" ? <ShieldCheck size={18} /> : <Download size={18} />;
 
   return (
     <div className={`job ${active ? "is-active" : ""}`}>
