@@ -438,6 +438,8 @@ export const en: Record<string, string> = {
 
   // about
   "about.installed": "Installed edition",
+  "about.portable": "Portable edition",
+  "queue.kindLabel.censor": "censoring",
   "about.legalTitle": "Use responsibly",
   "about.legal": "No detection is perfect: check the timeline before streaming. Blurring intimate areas does not make a video comply with every rule (sexual scenes, copyright): you remain responsible for what you stream.",
   "about.credits": "Built on NudeNet (notAI-tech, AGPL-3.0), ONNX Runtime (DirectML), FFmpeg, yt-dlp, FastAPI, pywebview and React.",
