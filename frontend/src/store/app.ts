@@ -79,7 +79,7 @@ interface AppState {
   toggleSidebar: () => void;
   saveSettings: (patch: Partial<{ [K in keyof Settings]: Partial<Settings[K]> }>) => Promise<void>;
   loadCapabilities: () => Promise<void>;
-  loadComponents: () => Promise<void>;
+  loadComponents: (check?: boolean, force?: boolean) => Promise<void>;
   toast: (t: Omit<Toast, "id">) => void;
   dismiss: (id: number) => void;
   sendUrls: (urls: string[]) => void;
@@ -154,8 +154,8 @@ export const useApp = create<AppState>((set, get) => ({
     const c = await api.get<Capabilities>("/api/upscale/capabilities");
     set({ capabilities: c });
   },
-  loadComponents: async () => {
-    const c = await api.get<Component[]>("/api/components");
+  loadComponents: async (check = false, force = false) => {
+    const c = await api.get<Component[]>(`/api/components${check ? `?check=1${force ? "&force=1" : ""}` : ""}`);
     set({ components: c });
   },
   toast: (t) => {

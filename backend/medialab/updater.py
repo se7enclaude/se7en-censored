@@ -100,10 +100,34 @@ def _launch(script: Path, cwd: str) -> None:
         subprocess.Popen(args, creationflags=HIDDEN, close_fds=True, cwd=cwd, **io)
 
 
+def _last_file() -> Path:
+    return paths().data / "update_check.json"
+
+
+def _load_last() -> dict:
+    try:
+        data = json.loads(_last_file().read_text("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_last(data: dict) -> None:
+    try:
+        _last_file().write_text(json.dumps(data), "utf-8")
+    except OSError:
+        pass
+
+
 class Updater:
     def __init__(self) -> None:
-        self.state: dict[str, Any] = {"state": "idle", "current": __version__, "configured": bool(feed_url()),
-                                      "portable": is_portable()}
+        configured = bool(feed_url())
+        self.state: dict[str, Any] = {"state": "idle" if configured else "unconfigured", "current": __version__,
+                                      "configured": configured, "portable": is_portable()}
+        # dernière vérification gardée d'un lancement à l'autre : « à jour, vérifié il y a 2 h » dès l'ouverture
+        last = _load_last()
+        if configured and last.get("checked") and last.get("latest") and not is_newer(str(last["latest"])):
+            self.state.update(state="uptodate", latest=last["latest"], checked=last["checked"])
         self._lock = threading.Lock()
         self._manifest: dict | None = None
         self._file: Path | None = None
@@ -113,6 +137,8 @@ class Updater:
     def _set(self, **kw: Any) -> None:
         self.state = {**self.state, **kw}
         bus.publish("update", self.state)
+        if kw.get("checked") and self.state.get("state") in ("uptodate", "available"):
+            _save_last({"checked": self.state["checked"], "latest": self.state.get("latest")})
 
     def snapshot(self) -> dict:
         return dict(self.state)
@@ -138,13 +164,14 @@ class Updater:
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
             log.info("Update check failed: %s", e)
             self._set(state="error", error={"code": "update_check_failed",
-                                            "message": "Could not check for updates.",
-                                            "hint": "Check your internet connection."}, checked=time.time())
+                                            "message": "Impossible de vérifier les mises à jour.",
+                                            "hint": "Vérifie ta connexion Internet."}, checked=time.time())
             return self.snapshot()
         version = str(manifest.get("version") or "")
         pkg = self._package(manifest)
         if not version or not pkg:
-            self._set(state="error", error={"code": "bad_manifest", "message": "The update information is invalid."})
+            self._set(state="error", error={"code": "bad_manifest",
+                                            "message": "Les informations de mise à jour sont invalides."})
             return self.snapshot()
         self._manifest = manifest
         if before.get("state") == "ready" and before.get("latest") == version and self._file and self._file.exists():

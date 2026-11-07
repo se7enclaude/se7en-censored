@@ -382,7 +382,11 @@ def create_app(services: Services) -> FastAPI:
 
     # -------------------------------------------------------- components
     @app.get("/api/components")
-    async def comps():
+    async def comps(check: bool = False, force: bool = False):
+        """Composants ; ``check`` : avec leur dernière version (« à jour » ou non), vérifiée au plus toutes les 6 h
+        (``force`` : tout de suite)."""
+        if check:
+            return await run_in_threadpool(components.status_checked, force)
         return await run_in_threadpool(components.status)
 
     @app.post("/api/components/{cid}/install")

@@ -178,14 +178,30 @@ function Components() {
   const comps = useApp((s) => s.components);
   const progress = useApp((s) => s.componentProgress);
   const load = useApp((s) => s.loadComponents);
+  const toast = useApp((s) => s.toast);
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
-    load();
+    load(true).catch(() => load());
   }, [load]);
+  const recheck = async () => {
+    setChecking(true);
+    try {
+      await load(true, true);
+    } catch (e: any) {
+      toast({ kind: "error", title: e.message });
+    } finally {
+      setChecking(false);
+    }
+  };
+  const checked = comps.find((c) => c.checked)?.checked;
   return (
     <>
       {comps.filter((c) => SHOWN_COMPONENTS.includes(c.id)).map((c) => {
         const p = progress[c.id];
         const busy = p && ["starting", "downloading", "extracting"].includes(p.state);
+        const restart = c.restart_required || p?.state === "restart_required";
+        // un bouton seulement quand il y a vraiment quelque chose à faire : plus de téléchargements en boucle
+        const action = !c.installed || (c.update_available && !restart && !c.managed);
         return (
           <div key={c.id} className="comp">
             <div className={`comp-icon ${c.installed ? "ok" : c.optional ? "" : "warn"}`}>{c.installed ? <CheckCircle2 size={18} /> : <Package size={18} />}</div>
@@ -194,7 +210,11 @@ function Components() {
                 <b>{c.name}</b>
                 {c.version && <span className="chip" style={{ height: 20 }}>{c.version}</span>}
                 {!c.installed && !c.optional && <span className="chip" style={{ height: 20, color: "var(--warning)" }}>{t("components.required", { what: c.required_for })}</span>}
-                {c.optional && <span className="chip" style={{ height: 20 }}>{t("components.optional")}</span>}
+                {c.optional && !c.installed && <span className="chip" style={{ height: 20 }}>{t("components.optional")}</span>}
+                {c.installed && c.managed && <span className="chip" style={{ height: 20 }}>{t(c.managed === "system" ? "components.managedSystem" : "components.managedCustom")}</span>}
+                {c.installed && !c.managed && !restart && (c.update_available
+                  ? <span className="chip" style={{ height: 20, color: "var(--accent)" }}>{t("components.updateTo", { v: c.latest ?? "" })}</span>
+                  : <span className="chip" style={{ height: 20, color: "var(--success)" }}><CheckCircle2 size={11} /> {t("components.upToDate")}</span>)}
               </div>
               <div className="faint" style={{ fontSize: 12 }}>{t.or(`component.${c.id}.desc`, c.description)}</div>
               {c.path && <div className="faint mono ellipsis" style={{ fontSize: 10.5 }}>{c.path}</div>}
@@ -219,14 +239,20 @@ function Components() {
                   </div>
                 </div>
               )}
-              {p?.state === "restart_required" && <div style={{ fontSize: 12, color: "var(--accent)", marginTop: 4 }}>{t("components.restart")}</div>}
+              {restart && <div style={{ fontSize: 12, color: "var(--accent)", marginTop: 4 }}>{t("components.restart")}</div>}
             </div>
-            <Button size="sm" variant={c.installed ? "default" : "primary"} loading={busy} icon={<DownloadIcon size={14} />} onClick={() => api.post(`/api/components/${c.id}/install`)}>
-              {c.installed ? t("components.update") : t("components.install")}
-            </Button>
+            {(action || busy) && (
+              <Button size="sm" variant={c.installed ? "default" : "primary"} loading={busy} icon={<DownloadIcon size={14} />} onClick={() => api.post(`/api/components/${c.id}/install`).catch((e) => toast({ kind: "error", title: e.message, body: e.hint }))}>
+                {c.installed ? t("components.update") : t("components.install")}
+              </Button>
+            )}
           </div>
         );
       })}
+      <div className="row" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+        <Button size="sm" variant="ghost" loading={checking} onClick={recheck}>{t("components.checkNow")}</Button>
+        {checked && <span className="faint mono" style={{ fontSize: 11 }}>{t("update.lastCheck", { when: relative(checked, t.lang) })}</span>}
+      </div>
       <p className="faint" style={{ fontSize: 12, marginTop: 10 }}>{t("components.sources")}</p>
     </>
   );

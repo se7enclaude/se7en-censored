@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Clock, FileText, ImageIcon, ScanText, Trash2 } from "lucide-react";
+import { Check, Clock, FileText, ImageIcon, ScanText, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, token } from "../../api/client";
 import { Button, Modal, Segmented, Switch } from "../../components/ui";
@@ -11,6 +11,7 @@ export interface Segment {
   f1: number;
   mode: SegmentMode;
   label?: string;
+  validated?: boolean; // vérifié par toi (les passages importés arrivent « à vérifier »)
 }
 
 interface Range {
@@ -68,7 +69,7 @@ export function parseTc(v: string): number | null {
   return h * 3600 + mi * 60 + sec;
 }
 
-export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame, defaultMode = "full", onSeek, onSaved, onError, setOpt }: {
+export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame, defaultMode = "full", onSeek, onSaved, onError, setOpt, confirm, onPut }: {
   pid: string;
   fps: number;
   frames: number;
@@ -81,10 +82,11 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
   onSaved: () => void;
   onError: (e: unknown) => void;
   setOpt: (k: "ai_outside" | "point_margin", v: boolean | number) => void;
+  confirm: (a: { title: string; body: string; ok: string; run: () => void }) => void;
+  onPut: (next: Segment[]) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
-  const put = (next: Segment[]) => api.put(`/api/censor/projects/${pid}/segments`, { segments: next }).then(onSaved);
-  const save = (next: Segment[]) => put(next).catch(onError);
+  const save = (next: Segment[]) => onPut(next).catch(onError);
   const add = (rows: { start: number; end: number; mode: SegmentMode; label: string }[]) => {
     const made = rows.map((r) => ({
       id: Math.random().toString(36).slice(2, 10),
@@ -92,33 +94,44 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
       f1: Math.min(frames - 1, Math.max(Math.floor(r.start * fps + 1e-6), Math.ceil(r.end * fps - 1e-6) - 1)),
       mode: r.mode,
       label: r.label,
+      validated: false, // importés : à vérifier, comme les zones de l'IA
     }));
-    return put([...segments, ...made].sort((a, b) => a.f0 - b.f0));
+    return onPut([...segments, ...made].sort((a, b) => a.f0 - b.f0));
   };
+  const remove = (g: Segment) =>
+    confirm({
+      title: "Retirer ce passage ?",
+      body: `${tc(g.f0 / fps)} → ${tc((g.f1 + 1) / fps)} ne sera plus flouté et sort de la liste.`,
+      ok: "Retirer",
+      run: () => save(segments.filter((x) => x.id !== g.id)),
+    });
+  const todo = segments.filter((g) => !g.validated).length;
 
   return (
-    <div className="card card-pad cz-passages">
+    <div className="cz-passages">
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        <span className="label">Passages par timecodes</span>
+        <span className="faint" style={{ fontSize: 12 }}>{segments.length ? `${segments.length} passage${segments.length > 1 ? "s" : ""}${todo ? ` · ${todo} à vérifier` : ""}` : ""}</span>
         <span className="spacer" />
         <Button size="sm" variant="outline" icon={<Clock size={14} />} tip="Colle une liste, ouvre un fichier ou une capture d'écran" onClick={() => setOpen(true)}>
           Ajouter des timecodes
         </Button>
       </div>
       {segments.length === 0 ? (
-        <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>
-          Tu connais déjà les passages à censurer ? Colle leurs timecodes (« 12:34 - 13:10 »), ouvre un .txt, .srt ou .csv, ou une capture d'écran : ils sont lus ici, sur ton PC. Par défaut, toute l'image est floutée pendant ces passages.
+        <p className="faint cz-empty">
+          Colle des timecodes (« 12:34 - 13:10 »), ouvre un .txt, .srt ou .csv ou une capture d'écran : ils sont lus ici, sur ton PC. Ou marque un passage en regardant : I au début, O à la fin.
         </p>
       ) : (
         <>
           <div className="cz-seglist">
             {segments.map((s) => (
-              <div key={s.id} className={clsx("cz-seg", s.f0 <= frame && frame <= s.f1 && "now")}>
+              <div key={s.id} className={clsx("cz-seg", s.f0 <= frame && frame <= s.f1 && "now", !s.validated && "todo")}>
                 <button className="cz-seg-time mono" onClick={() => onSeek(s.f0)} title={s.label || undefined}>
                   {tc(s.f0 / fps)} → {tc((s.f1 + 1) / fps)}
+                  {!s.validated && <span className="cz-badge">à vérifier</span>}
                 </button>
                 <Segmented size="sm" value={s.mode} onChange={(v) => save(segments.map((x) => (x.id === s.id ? { ...x, mode: v } : x)))} options={MODES} />
-                <Button size="sm" variant="ghost" iconOnly icon={<Trash2 size={13} />} tip="Retirer ce passage" onClick={() => save(segments.filter((x) => x.id !== s.id))} />
+                {!s.validated && <Button size="sm" variant="ghost" iconOnly className="cz-ok" icon={<Check size={14} />} tip="C'est juste : valider ce passage" onClick={() => save(segments.map((x) => (x.id === s.id ? { ...x, validated: true } : x)))} />}
+                <Button size="sm" variant="ghost" iconOnly className="cz-no" icon={<Trash2 size={13} />} tip="Retirer ce passage" onClick={() => remove(s)} />
               </div>
             ))}
           </div>
@@ -128,7 +141,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
           </label>
         </>
       )}
-      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => setOpen(false)).catch(onError)} onError={onError} />
+      <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => { setOpen(false); onSaved(); }).catch(onError)} onError={onError} />
     </div>
   );
 }

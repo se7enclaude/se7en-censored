@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeft, Check as CheckIcon, ChevronLeft, ChevronRight, Eye, EyeOff, FolderOpen, Link2, Pause, Pin, Play, Plus, RefreshCw, ShieldCheck, SkipBack, SkipForward, Square, Trash2, Undo2, Upload, Video, WandSparkles } from "lucide-react";
+import { ArrowLeft, Check as CheckIcon, FolderOpen, Link2, Pin, Plus, RefreshCw, ShieldCheck, Square, Trash2, Upload, Video, WandSparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, localMediaUrl, mediaUrl } from "../api/client";
 import { events } from "../api/ws";
@@ -7,7 +7,10 @@ import { Button, Empty, ErrorAlert, Modal, PageHead, Progress, Segmented, Switch
 import { useFileIntake } from "../hooks/useFileIntake";
 import { duration as fmtDuration } from "../lib/format";
 import { useApp } from "../store/app";
-import { Passages, Segment } from "./censor/Passages";
+import { useConfirm } from "./censor/Confirm";
+import { Passages, Segment, tc } from "./censor/Passages";
+import { LiveBlur, Mark, Player, PlayerApi } from "./censor/Player";
+import { ZonesList } from "./censor/ZonesList";
 import { ScopeField } from "./censor/ScopeField";
 import "../styles/clip.css";
 import "../styles/censor.css";
@@ -46,6 +49,9 @@ interface Project {
   export: { file: string; size: number; seconds: number; blurred_frames: number; mode?: "smart" | "full"; reencoded_share?: number; smart_skipped?: string; encoder?: string } | null;
   stats: { zones?: number; seconds?: number; analysis_seconds?: number };
   detect?: { v?: number; fps: number; frames: number; seconds: number; gpu: boolean; refined?: number };
+  preview?: { path?: string; width?: number; height?: number; direct?: boolean } | null; // copie d'aperçu lue par l'appli
+  preview_job?: string | null;
+  preview_error?: { message: string } | null;
 }
 
 interface Summary {
@@ -68,6 +74,7 @@ interface Track {
   hits: number;
   boxes: Box[];
   hidden: boolean;
+  validated?: boolean; // vérifiée et gardée
 }
 
 interface Manual {
@@ -507,86 +514,87 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
 }
 
 // ------------------------------------------------------------------ vérification
+type Tab = "zones" | "passages" | "manual" | "settings";
+
 function Review({ project: p, zones: z, live, exporting, onChange, onError }: { project: Project; zones: Zones; live?: Live; exporting: boolean; onChange: () => void; onError: (e: any) => void }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const player = useRef<PlayerApi | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [canPlay, setCanPlay] = useState(true);
   const [preview, setPreview] = useState(true);
   const [stillUrl, setStillUrl] = useState<string | null>(null);
+  const [stillReady, setStillReady] = useState(false);
   const [opts, setOpts] = useState<Options>(p.options);
   const [selected, setSelected] = useState<string | null>(null); // zone manuelle choisie
   const [drawing, setDrawing] = useState<"new" | "fixed" | "key" | null>(null);
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const justDrew = useRef(false); // le clic qui termine un cadre ne doit pas lancer la lecture
   const [following, setFollowing] = useState(false);
+  const [tab, setTab] = useState<Tab>("zones");
+  const [markIn, setMarkIn] = useState<number | null>(null);
+  const [help, setHelp] = useState(false);
   const toast = useApp((s) => s.toast);
+  const ask = useConfirm(p.id);
   const fps = z.fps || p.video?.fps || 25;
   const total = z.frames;
   const W = p.video!.width;
   const H = p.video!.height;
   const visible = useMemo(() => z.tracks.filter((t) => !t.hidden), [z.tracks]);
+  const segments = useMemo(() => p.segments ?? z.segments ?? [], [p.segments, z.segments]);
+
+  // la vidéo lue : la copie d'aperçu si elle existe, sinon l'original quand la fenêtre sait le lire
+  const pv = p.preview;
+  const src = pv?.path ? localMediaUrl(pv.path) : pv?.direct && p.source.path ? localMediaUrl(p.source.path) : null;
+  const preparing = !src && (!!p.preview_job || live?.op === "preview");
+  useEffect(() => {
+    if (!pv?.path && !pv?.direct && !p.preview_job && !p.preview_error && p.source.path)
+      api.post(`/api/censor/projects/${p.id}/preview`).then(onChange).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.id, pv?.path, pv?.direct]);
 
   const pendingOpts = useRef<Partial<Options>>({});
   useEffect(() => setOpts({ ...p.options, ...pendingOpts.current }), [p.options]);
 
-  // la vidéo pilote le numéro d'image ; sans lecture possible (codec), on avance image par image
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    let raf = 0;
-    const tick = () => {
-      setFrame(Math.min(total - 1, Math.floor(v.currentTime * fps + 1e-3)));
-      if (!v.paused) raf = requestAnimationFrame(tick);
-    };
-    const onPlay = () => { setPlaying(true); raf = requestAnimationFrame(tick); };
-    const onPause = () => { setPlaying(false); tick(); };
-    v.addEventListener("play", onPlay);
-    v.addEventListener("pause", onPause);
-    v.addEventListener("seeked", tick);
-    return () => {
-      cancelAnimationFrame(raf);
-      v.removeEventListener("play", onPlay);
-      v.removeEventListener("pause", onPause);
-      v.removeEventListener("seeked", tick);
-    };
-  }, [fps, total]);
+  const onFrame = useCallback((f: number) => setFrame(f), []);
+  const seek = useCallback((f: number) => player.current?.seek(f), []);
 
-  const seek = useCallback(
-    (f: number) => {
-      const k = Math.max(0, Math.min(total - 1, Math.round(f)));
-      setFrame(k);
-      const v = videoRef.current;
-      if (v && canPlay) v.currentTime = (k + 0.5) / fps;
+  // ce qui est flouté à cette image, comme à l'export (passages plein cadre, zones de l'IA, zones à la main)
+  const blurredAt = useCallback(
+    (f: number): Box[] => {
+      if (segments.some((g) => g.mode === "full" && g.f0 <= f && f <= g.f1)) return [[0, 0, 1, 1]];
+      const out: Box[] = [];
+      if (opts.ai_outside !== false || segments.some((g) => g.mode === "ai" && g.f0 <= f && f <= g.f1))
+        for (const t of visible) if (t.f0 <= f && f <= t.f1) out.push(t.boxes[f - t.f0]);
+      for (const m of p.manual) {
+        const b = manualAt(m, f);
+        if (b) out.push(b);
+      }
+      return out;
     },
-    [fps, total, canPlay],
+    [segments, opts.ai_outside, visible, p.manual],
   );
+  const blurred = useMemo(() => blurredAt(frame), [blurredAt, frame]);
 
-  // image floutée par le moteur (exactement comme à l'export) quand la vidéo est en pause
-  const segments = useMemo(() => p.segments ?? z.segments ?? [], [p.segments, z.segments]);
+  // image exacte du moteur, en pause, quand on ne bouge plus (le flou en direct la précède)
   const optsKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden, segments, opts.ai_outside]);
   useEffect(() => {
-    if (playing) {
+    setStillReady(false);
+    if (playing || (src && !preview)) {
       setStillUrl(null);
       return;
     }
-    if (canPlay && !preview) {
-      setStillUrl(null);
-      return;
-    }
-    const t = setTimeout(() => setStillUrl(mediaUrl(`/api/censor/projects/${p.id}/frame?f=${frame}&blur=${preview ? 1 : 0}&k=${encodeURIComponent(optsKey)}`)), 120);
+    const t = setTimeout(() => setStillUrl(mediaUrl(`/api/censor/projects/${p.id}/frame?f=${frame}&blur=${preview ? 1 : 0}&k=${encodeURIComponent(optsKey)}`)), src ? 400 : 90);
     return () => clearTimeout(t);
-  }, [frame, playing, preview, canPlay, p.id, optsKey]);
+  }, [frame, playing, preview, src, p.id, optsKey]);
 
-  // gros plan flouté d'une zone, à côté de l'intensité : la zone de l'image en cours, sinon la plus longue
+  // gros plan flouté d'une zone (réglage de l'intensité) : la zone de l'image en cours, sinon la plus longue
   const [sample, setSample] = useState<{ f: number; url: string } | null>(null);
   const fxKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden, segments, opts.ai_outside]);
   useEffect(() => {
-    if (playing) return;
+    if (playing || tab !== "settings") return;
     let f: number | null = null;
-    if (z.tracks.some((t) => !t.hidden && t.f0 <= frame && frame <= t.f1) || p.manual.some((m) => manualAt(m, frame)) || segments.some((g) => g.f0 <= frame && frame <= g.f1)) f = frame;
-    else if (sample && sample.f !== frame && (visible.some((t) => t.f0 <= sample.f && sample.f <= t.f1) || p.manual.some((m) => manualAt(m, sample.f)))) f = sample.f;
+    if (blurred.length && !(blurred.length === 1 && blurred[0][2] - blurred[0][0] > 0.98)) f = frame;
+    else if (sample && blurredAt(sample.f).length) f = sample.f;
     else {
       const t = [...visible].sort((a, b) => b.f1 - b.f0 - (a.f1 - a.f0))[0];
       const m = p.manual[0];
@@ -597,11 +605,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       return;
     }
     const at = f;
-    const h = setTimeout(() => setSample({ f: at, url: mediaUrl(`/api/censor/projects/${p.id}/frame?f=${at}&zoom=1&k=${encodeURIComponent(fxKey)}`) }), 250);
+    const h = setTimeout(() => setSample({ f: at, url: mediaUrl(`/api/censor/projects/${p.id}/frame?f=${at}&zoom=1&k=${encodeURIComponent(fxKey)}`) }), 300);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, playing, fxKey, visible, p.id]);
+  }, [frame, playing, fxKey, visible, p.id, tab]);
 
+  // réglages : cumulés et envoyés ensemble ; l'export attend qu'ils soient enregistrés
   const saveOpts = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flushOpts = useCallback(async () => {
     clearTimeout(saveOpts.current);
@@ -616,7 +625,6 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     clearTimeout(saveOpts.current);
     saveOpts.current = setTimeout(() => flushOpts().then(onChange).catch(onError), 300);
   };
-  // en quittant le projet, rien ne se perd
   useEffect(() => () => { flushOpts().catch(() => undefined); }, [flushOpts]);
   const [exportSending, setExportSending] = useState(false);
   const startExport = async () => {
@@ -632,33 +640,40 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     }
   };
 
-  const boxesAt = (f: number) => {
-    const out: { box: Box; color: string; manual?: string; hidden?: boolean }[] = [];
-    for (const t of z.tracks) {
-      if (t.f0 > f || t.f1 < f) continue;
-      out.push({ box: t.boxes[f - t.f0], color: CLASS_COLOR[t.cls] ?? "#fff", hidden: t.hidden });
-    }
-    for (const m of p.manual) {
-      const b = manualAt(m, f);
-      if (b) out.push({ box: b, color: CLASS_COLOR.manual, manual: m.id });
-    }
-    if (segments.some((g) => g.mode === "full" && g.f0 <= f && f <= g.f1)) out.push({ box: [0.004, 0.004, 0.996, 0.996], color: CLASS_COLOR.segment });
-    return out;
-  };
-
   const marks = useMemo(() => {
-    const all: { f0: number; f1: number; color: string; segment?: boolean }[] = [...visible.map((t) => ({ f0: t.f0, f1: t.f1, color: CLASS_COLOR[t.cls] ?? "#fff" })), ...p.manual.map((m) => ({ f0: m.keys[0].f, f1: m.keys[m.keys.length - 1].f, color: CLASS_COLOR.manual })), ...segments.map((g) => ({ f0: g.f0, f1: g.f1, color: CLASS_COLOR.segment, segment: true }))];
+    const all: Mark[] = [
+      ...visible.map((t) => ({ f0: t.f0, f1: t.f1, color: CLASS_COLOR[t.cls] ?? "#fff", kind: (t.validated ? "validated" : "ai") as Mark["kind"] })),
+      ...p.manual.map((m) => ({ f0: m.keys[0].f, f1: m.keys[m.keys.length - 1].f, color: CLASS_COLOR.manual, kind: "manual" as const })),
+      ...segments.map((g) => ({ f0: g.f0, f1: g.f1, color: CLASS_COLOR.segment, kind: "segment" as const })),
+    ];
     return all.sort((a, b) => a.f0 - b.f0);
   }, [visible, p.manual, segments]);
 
-  const jump = (dir: 1 | -1) => {
+  const jump = useCallback((dir: 1 | -1) => {
     const starts = marks.map((m) => m.f0);
     const target = dir > 0 ? starts.find((s) => s > frame + 1) : [...starts].reverse().find((s) => s < frame - 1);
     if (target != null) seek(target);
-  };
+  }, [marks, frame, seek]);
 
   const sel = p.manual.find((m) => m.id === selected) ?? null;
   const saveManual = (manual: Manual[]) => api.put(`/api/censor/projects/${p.id}/manual`, { manual }).then(onChange).catch(onError);
+  const putSegments = (next: Segment[]) => api.put(`/api/censor/projects/${p.id}/segments`, { segments: next }).then(onChange);
+
+  // trier les propositions de l'IA
+  const validate = (t: Track) => api.post(`/api/censor/projects/${p.id}/validate`, { track: t.id }).then(onChange).catch(onError);
+  const unvalidate = (t: Track) => api.post(`/api/censor/projects/${p.id}/unvalidate`, { track: t.id }).then(onChange).catch(onError);
+  const retire = (t: Track) =>
+    ask.confirm({
+      title: "Retirer cette zone ?",
+      body: `${CLASS_LABEL[t.cls] ?? t.cls} à ${tc(Math.floor(t.f0 / fps))} (${((t.f1 - t.f0 + 1) / fps).toFixed(1).replace(".", ",")} s) ne sera plus floutée et sort de la liste. Tu la retrouves dans « Retirées ».`,
+      ok: "Retirer la zone",
+      run: () => api.post(`/api/censor/projects/${p.id}/hide`, { track: t.id }).then(onChange).catch(onError),
+    });
+  const restore = (t: Track) => {
+    const i = z.hidden.findIndex((h) => h.cls === t.cls && h.f0 <= t.f1 && h.f1 >= t.f0);
+    api.post(`/api/censor/projects/${p.id}/unhide`, { index: i }).then(onChange).catch(onError);
+  };
+  const atFrame = (list: Track[]) => list.find((t) => t.f0 <= frame && frame <= t.f1);
 
   // dessin d'une zone sur l'image
   const rel = (e: React.PointerEvent) => {
@@ -667,7 +682,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   };
   const onDown = (e: React.PointerEvent) => {
     if (!drawing) return;
-    videoRef.current?.pause();
+    player.current?.pause();
     const q = rel(e);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setDrag({ x0: q.x, y0: q.y, x1: q.x, y1: q.y });
@@ -686,6 +701,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     const mode = drawing;
     setDrawing(null);
     if (box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01) return;
+    setTab("manual");
     if (mode === "new") {
       const id = Math.random().toString(36).slice(2, 10);
       followFrom(frame, box, (keys) => [...p.manual, { id, keys }]);
@@ -697,14 +713,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       saveManual([...p.manual, { id, fixed: true, keys: [{ f: frame, box }, { f: end, box }] }]);
       setSelected(id);
       const atCut = nextCut != null && end === nextCut - 1;
-      toast({ kind: "info", title: atCut ? `Zone fixe posée pour ${((end - frame + 1) / fps).toFixed(1).replace(".", ",")} s, jusqu'au changement de plan` : `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avance jusqu'à la fin voulue et « Finir ici » (F) pour l'arrêter ou l'allonger.", timeout: 3500 });
+      toast({ kind: "info", title: atCut ? `Zone fixe posée pour ${((end - frame + 1) / fps).toFixed(1).replace(".", ",")} s, jusqu'au changement de plan` : `Zone fixe posée pour ${FIXED_S} s`, body: "Elle ne bouge pas. Avance jusqu'à la fin voulue et « Finir ici » (E) pour l'arrêter ou l'allonger.", timeout: 3500 });
     } else if (mode === "key" && sel?.fixed) {
-      // zone fixe : le nouveau cadre vaut de cette image jusqu'à sa fin, sans suivi
       const keep = sel.keys.filter((k) => k.f < frame);
       const end = Math.max(frame, sel.keys[sel.keys.length - 1].f);
       saveManual(p.manual.map((m) => (m.id === sel.id ? { ...m, keys: [...keep, { f: frame, box }, ...(end > frame ? [{ f: end, box }] : [])] } : m)));
     } else if (mode === "key" && selected) {
-      // on garde les images clés d'avant, la suite est refaite en suivant la zone redessinée
       const keep = p.manual.find((m) => m.id === selected)?.keys.filter((k) => k.f < frame) ?? [];
       followFrom(frame, box, (keys) => p.manual.map((m) => (m.id === selected ? { ...m, keys: [...keep, ...keys] } : m)));
     }
@@ -734,18 +748,27 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     const b = manualAt(m, Math.min(frame, m.keys[m.keys.length - 1].f)) ?? m.keys[m.keys.length - 1].box;
     saveManual(p.manual.map((x) => (x.id === m.id ? { ...x, keys: [...x.keys.filter((k) => k.f < frame), { f: Math.max(frame, x.keys[0].f), box: b }] } : x)));
   };
-  const removeManual = (m: Manual) => {
-    saveManual(p.manual.filter((x) => x.id !== m.id));
-    setSelected(null);
-  };
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v || !canPlay) return;
-    if (v.paused) v.play();
-    else v.pause();
-  };
+  const removeManual = (m: Manual) =>
+    ask.confirm({
+      title: "Supprimer cette zone à la main ?",
+      body: `La zone de ${tc(m.keys[0].f / fps)} à ${tc(m.keys[m.keys.length - 1].f / fps)} ne sera plus floutée.`,
+      ok: "Supprimer",
+      run: () => { saveManual(p.manual.filter((x) => x.id !== m.id)); setSelected(null); },
+    });
 
-  const here = boxesAt(frame);
+  // passage plein cadre marqué en regardant : I au début, O à la fin
+  const markOut = () => {
+    if (markIn == null) {
+      toast({ kind: "info", title: "Marque d'abord le début avec I", timeout: 2500 });
+      return;
+    }
+    const a = Math.min(markIn, frame);
+    const b = Math.max(markIn, frame);
+    setMarkIn(null);
+    putSegments([...segments, { id: Math.random().toString(36).slice(2, 10), f0: a, f1: b, mode: "full" as const, label: "marqué à la main", validated: true }].sort((x, y) => x.f0 - y.f0))
+      .then(() => { setTab("passages"); toast({ kind: "success", title: `Passage flouté en plein cadre : ${tc(a / fps)} → ${tc((b + 1) / fps)}`, timeout: 3000 }); })
+      .catch(onError);
+  };
 
   // raccourcis clavier de la vérification (sauf pendant la saisie dans un champ)
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
@@ -755,135 +778,118 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const k = e.key.toLowerCase();
-    const step = e.shiftKey ? Math.round(fps) : 1;
+    const pl = player.current;
     const done = () => e.preventDefault();
-    if (k === " ") { done(); togglePlay(); }
-    else if (k === "arrowleft") { done(); videoRef.current?.pause(); seek(frame - step); }
-    else if (k === "arrowright") { done(); videoRef.current?.pause(); seek(frame + step); }
+    if (k === " " || k === "k") { done(); pl?.toggle(); }
+    else if (k === "arrowleft" || k === ",") { done(); if (e.shiftKey) pl?.skip(-1); else pl?.step(-1); }
+    else if (k === "arrowright" || k === ".") { done(); if (e.shiftKey) pl?.skip(1); else pl?.step(1); }
+    else if (k === "j") { done(); pl?.skip(-10); }
+    else if (k === "l") { done(); pl?.skip(10); }
+    else if (k === "home") { done(); seek(0); }
+    else if (k === "end") { done(); seek(total - 1); }
     else if (k === "n") { done(); jump(1); }
     else if (k === "p") { done(); jump(-1); }
-    else if (k === "a") { done(); videoRef.current?.pause(); setDrawing(drawing === "new" ? null : "new"); }
-    else if (k === "z") { done(); videoRef.current?.pause(); setDrawing(drawing === "fixed" ? null : "fixed"); }
-    else if (k === "r" && sel) { done(); videoRef.current?.pause(); setDrawing(drawing === "key" ? null : "key"); }
-    else if (k === "f" && sel) { done(); finishHere(sel); }
-    else if (k === "b") { done(); setPreview(!preview); }
-    else if (k === "escape") {
-      if (drawing || drag) { done(); setDrawing(null); setDrag(null); }
-      else if (selected) { done(); setSelected(null); }
-    } else if (k === "delete" || k === "backspace") {
+    else if (k === "[") { done(); pl?.speed(-1); }
+    else if (k === "]") { done(); pl?.speed(1); }
+    else if (k === "m") { done(); pl?.mute(); }
+    else if (k === "f") { done(); pl?.fullscreen(); }
+    else if (k === "b") { done(); setPreview((v) => !v); }
+    else if (k === "v") {
+      done();
+      const t = atFrame(visible.filter((x) => !x.validated));
+      if (t) validate(t);
+    } else if (k === "x" || k === "delete" || k === "backspace") {
       done();
       if (sel) removeManual(sel);
       else {
-        const t = z.tracks.find((t) => !t.hidden && t.f0 <= frame && frame <= t.f1);
-        if (t) api.post(`/api/censor/projects/${p.id}/hide`, { track: t.id }).then(onChange).catch(onError);
+        const t = atFrame(visible);
+        if (t) retire(t);
       }
     }
+    else if (k === "i") { done(); setMarkIn(frame); toast({ kind: "info", title: `Début du passage : ${tc(frame / fps)}`, body: "Va à la fin et appuie sur O.", timeout: 2500 }); }
+    else if (k === "o") { done(); markOut(); }
+    else if (k === "a") { done(); pl?.pause(); setDrawing(drawing === "new" ? null : "new"); }
+    else if (k === "z") { done(); pl?.pause(); setDrawing(drawing === "fixed" ? null : "fixed"); }
+    else if (k === "r" && sel) { done(); pl?.pause(); setDrawing(drawing === "key" ? null : "key"); }
+    else if (k === "e" && sel) { done(); finishHere(sel); }
+    else if (k === "?") { done(); setHelp(true); }
+    else if (k === "escape") {
+      if (drawing || drag) { done(); setDrawing(null); setDrag(null); }
+      else if (markIn != null) { done(); setMarkIn(null); }
+      else if (selected) { done(); setSelected(null); }
+    }
   };
-  const page = useApp((s) => s.page);
-  useEffect(() => {
-    if (page !== "censor") videoRef.current?.pause();
-  }, [page]);
   useEffect(() => {
     const h = (e: KeyboardEvent) => keys.current(e);
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
-  const listed = useMemo(() => z.tracks.slice(0, 400), [z.tracks]);
+  const page = useApp((s) => s.page);
+  useEffect(() => {
+    if (page !== "censor") player.current?.pause();
+  }, [page]);
+
+  const showLive = preview && blurred.length > 0 && !(stillReady && !playing);
+  const todoCount = visible.filter((t) => !t.validated).length;
 
   return (
     <div className="cz-layout rise">
       <div className="cz-main">
-        <div className="card cz-viewer">
-          <div className="cz-stage" ref={stageRef} style={{ aspectRatio: `${W} / ${H}` }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
-            {canPlay && p.source.path && (
-              <video ref={videoRef} src={localMediaUrl(p.source.path)} preload="auto" onError={() => setCanPlay(false)} onClick={() => !drawing && !justDrew.current && togglePlay()} />
-            )}
-            {stillUrl && <img className="cz-still" src={stillUrl} alt="" draggable={false} />}
-            <svg className={clsx("cz-boxes", drawing && "drawing")} viewBox="0 0 1 1" preserveAspectRatio="none">
-              {(!preview || playing || !stillUrl) &&
-                here.map((b, i) => (
-                  <rect key={i} x={b.box[0]} y={b.box[1]} width={b.box[2] - b.box[0]} height={b.box[3] - b.box[1]} className={clsx(b.hidden && "off", b.manual && "manual", b.manual === selected && "sel")} style={{ stroke: b.color }} vectorEffect="non-scaling-stroke" />
-                ))}
-              {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)} height={Math.abs(drag.y1 - drag.y0)} className="draft" vectorEffect="non-scaling-stroke" />}
-            </svg>
-            {drawing && <div className="cz-draw-hint">{drawing === "fixed" || (drawing === "key" && sel?.fixed) ? "Trace un cadre : il restera tel quel, sans bouger" : "Trace un cadre sur la zone à flouter : elle suivra le mouvement toute seule"} · Échap pour annuler</div>}
-            {following && <div className="cz-draw-hint">Suivi de la zone…</div>}
-          </div>
-          <div className="cz-controls">
-            <Button size="sm" variant="ghost" iconOnly icon={<SkipBack size={15} />} tip="Zone précédente (P)" onClick={() => jump(-1)} />
-            <Button size="sm" variant="ghost" iconOnly icon={<ChevronLeft size={16} />} tip="Image précédente (←, Maj+← : 1 s)" onClick={() => seek(frame - 1)} />
-            {canPlay && <Button size="sm" variant="primary" iconOnly icon={playing ? <Pause size={15} /> : <Play size={15} />} tip="Lecture / pause (Espace)" onClick={togglePlay} />}
-            <Button size="sm" variant="ghost" iconOnly icon={<ChevronRight size={16} />} tip="Image suivante (→, Maj+→ : 1 s)" onClick={() => seek(frame + 1)} />
-            <Button size="sm" variant="ghost" iconOnly icon={<SkipForward size={15} />} tip="Zone suivante (N)" onClick={() => jump(1)} />
-            <span className="mono cz-time">{clock(frame / fps)} <span className="faint">/ {clock(total / fps)} · image {frame}</span></span>
-            <span className="spacer" />
-            <label className="row clip-check" data-tip="Montre l'image floutée telle qu'elle sera exportée, vidéo en pause (B)">
-              <Switch checked={preview} onChange={setPreview} />
-              <span>{preview ? <Eye size={14} /> : <EyeOff size={14} />} Aperçu flouté</span>
-            </label>
-          </div>
-          <Timeline marks={marks} total={total} frame={frame} onSeek={seek} />
-          <div className="cz-keys">
-            {KEYS.map(([k, l]) => (
-              <span key={k}>
-                <kbd className="kbd">{k}</kbd> {l}
-              </span>
-            ))}
-          </div>
-          {!canPlay && <div className="faint" style={{ fontSize: 12, padding: "6px 14px 12px" }}>Ce format ne se lit pas dans la fenêtre : avance image par image ou clique sur la frise. L'export n'est pas concerné.</div>}
-        </div>
-
-        <div className="card card-pad cz-manual">
-          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-            <span className="label">Zones à la main</span>
-            <span className="spacer" />
-            <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Trace un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Zone qui suit</Button>
-            <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} tip={`Trace un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
-            {sel && (
-              <>
-                <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessine la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessine la zone à cette image : le suivi repart d'ici (R)"}>Recadrer à cette image</Button>
-                <Button size="sm" variant="outline" tip="La zone s'arrête à cette image, plus tôt ou plus tard (F)" onClick={() => finishHere(sel)}>Finir ici</Button>
-                <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} tip="Supprimer cette zone (Suppr)" onClick={() => removeManual(sel)}>Supprimer</Button>
-              </>
-            )}
-          </div>
-          {p.manual.length > 0 ? (
-            <div className="cz-chips">
-              {p.manual.map((m, i) => (
-                <button key={m.id} className={clsx("cz-chip", m.id === selected && "on")} aria-pressed={m.id === selected} onClick={() => { setSelected(m.id); seek(m.keys[0].f); }}>
-                  Zone {i + 1}{m.fixed ? " · fixe" : ""} · {clock(m.keys[0].f / fps)} → {clock(m.keys[m.keys.length - 1].f / fps)}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>Une zone ratée par l'IA ? Mets la vidéo au bon moment, appuie sur A (ou « Zone qui suit ») et trace un cadre : la zone suit le mouvement toute seule, jusqu'à 10 s. Pour un simple cadre qui ne bouge pas, choisis « Zone fixe » (Z). « Recadrer » redessine la zone, « Finir ici » l'arrête.</p>
-          )}
-        </div>
-
-        <Passages
-          pid={p.id}
+        <Player
+          ref={player}
+          src={src}
           fps={fps}
-          frames={total}
-          segments={segments}
-          aiOutside={opts.ai_outside !== false}
-          margin={opts.point_margin ?? 2}
+          total={total}
           frame={frame}
-          defaultMode={z.scope_only ? "ai" : "full"}
-          onSeek={seek}
-          onSaved={onChange}
-          onError={onError}
-          setOpt={(k, v) => setOpt(k, v as never)}
+          onFrame={onFrame}
+          ratio={W / H}
+          stillUrl={stillUrl}
+          onStillLoad={() => setStillReady(true)}
+          marks={marks}
+          preview={preview}
+          setPreview={setPreview}
+          stageRef={stageRef}
+          stageProps={{ onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp }}
+          onPlayingChange={setPlaying}
+          onJump={jump}
+          onVideoClick={() => !drawing && !justDrew.current && player.current?.toggle()}
+          waitingText={preparing ? `Préparation de l'aperçu vidéo${live?.op === "preview" ? ` · ${Math.round(live.percent)} %` : "…"} En attendant : image par image.` : null}
+          overlay={
+            <>
+              {showLive && <LiveBlur boxes={blurred} style={opts.style} shape={opts.shape} strength={opts.strength} />}
+              <svg className={clsx("cz-boxes", drawing && "drawing")} viewBox="0 0 1 1" preserveAspectRatio="none">
+                {!preview &&
+                  boxesAt(z.tracks, p.manual, frame).map((b, i) => (
+                    <rect key={i} x={b.box[0]} y={b.box[1]} width={b.box[2] - b.box[0]} height={b.box[3] - b.box[1]} className={clsx(b.hidden && "off", b.manual && "manual", b.manual === selected && "sel")} style={{ stroke: b.color }} vectorEffect="non-scaling-stroke" />
+                  ))}
+                {preview && sel && manualAt(sel, frame) && (() => { const b = manualAt(sel, frame)!; return <rect x={b[0]} y={b[1]} width={b[2] - b[0]} height={b[3] - b[1]} className="manual sel" style={{ stroke: "#fff" }} vectorEffect="non-scaling-stroke" />; })()}
+                {drag && <rect x={Math.min(drag.x0, drag.x1)} y={Math.min(drag.y0, drag.y1)} width={Math.abs(drag.x1 - drag.x0)} height={Math.abs(drag.y1 - drag.y0)} className="draft" vectorEffect="non-scaling-stroke" />}
+              </svg>
+              {drawing && <div className="cz-draw-hint">{drawing === "fixed" || (drawing === "key" && sel?.fixed) ? "Trace un cadre : il restera tel quel, sans bouger" : "Trace un cadre sur la zone à flouter : elle suivra le mouvement toute seule"} · Échap pour annuler</div>}
+              {following && <div className="cz-draw-hint">Suivi de la zone…</div>}
+              {markIn != null && !drawing && <div className="cz-draw-hint">Passage depuis {tc(markIn / fps)} · O pour la fin · Échap pour annuler</div>}
+            </>
+          }
         />
+        <div className="cz-keys">
+          {KEYS.slice(0, 7).map(([k, l]) => (
+            <span key={k}>
+              <kbd className="kbd">{k}</kbd> {l}
+            </span>
+          ))}
+          <button className="cz-keys-more" onClick={() => setHelp(true)}>Tous les raccourcis (?)</button>
+        </div>
       </div>
 
       <div className="cz-side">
-        <div className="card card-pad">
+        <div className="card card-pad cz-export">
           <div className="cz-stats">
             <div><b>{z.stats.zones}</b><span>zones</span></div>
             <div><b>{fmtDuration(z.stats.seconds)}</b><span>floutées</span></div>
+            <div><b>{todoCount}</b><span>à vérifier</span></div>
           </div>
           {exporting ? (
-            <div style={{ marginTop: 14 }}>
+            <div style={{ marginTop: 12 }}>
               <Progress value={live?.op === "export" ? live.percent : null} state="active" showValue />
               <div className="row" style={{ marginTop: 6 }}>
                 <span className="faint ellipsis" style={{ fontSize: 12 }}>{live?.op === "export" ? live.label : "Préparation…"}</span>
@@ -892,7 +898,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               </div>
             </div>
           ) : (
-            <Button variant="primary" full icon={<ShieldCheck size={16} />} style={{ marginTop: 14 }} loading={exportSending} onClick={startExport}>
+            <Button variant="primary" full icon={<ShieldCheck size={16} />} style={{ marginTop: 12 }} loading={exportSending} onClick={startExport}>
               {p.export?.file ? "Exporter à nouveau" : "Exporter la vidéo floutée"}
             </Button>
           )}
@@ -903,7 +909,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               </div>
               <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
                 {p.export.mode === "smart"
-                  ? `Rendu intelligent : ${Math.max(0.1, Math.round((p.export.reencoded_share ?? 0) * 1000) / 10).toString().replace(".", ",")} % de l'image réencodé, le reste copié à l'identique · ${fmtDuration(p.export.seconds)}`
+                  ? `Rendu intelligent : ${Math.max(0.1, Math.round((p.export.reencoded_share ?? 0) * 1000) / 10).toString().replace(".", ",")} % réencodé, le reste copié à l'identique · ${fmtDuration(p.export.seconds)}`
                   : p.export.mode === "full"
                     ? `Export complet${p.export.smart_skipped ? ` (${p.export.smart_skipped})` : ""} · ${fmtDuration(p.export.seconds)}`
                     : null}
@@ -912,74 +918,167 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
           )}
         </div>
 
-        <div className="card card-pad cz-settings">
-          <div className="label">À flouter</div>
-          <div className="cz-classes">
-            {CLASSES.map((c) => {
-              const on = opts.classes.includes(c.id);
-              return (
-                <button key={c.id} className={clsx("cz-class", on && "on")} aria-pressed={on} onClick={() => setOpt("classes", on ? opts.classes.filter((x) => x !== c.id) : [...opts.classes, c.id])}>
-                  <span className="cz-dot" style={{ background: CLASS_COLOR[c.id] }} />
-                  {c.label}
-                </button>
-              );
-            })}
-          </div>
-          <Range label="Sensibilité" left="Strict" right="Au moindre doute" value={opts.sensitivity} min={0} max={100} onChange={(v) => setOpt("sensitivity", v)} />
-          {z.refined && (
-            <label className="row clip-check" style={{ marginTop: 10 }} data-tip="Une 2e IA (CLIP) revoit chaque zone : celles qu'elle juge non nues (pecs, verre, bras…) ne sont pas floutées">
-              <Switch checked={opts.verify !== false} onChange={(v) => setOpt("verify", v)} />
-              <span>2e vérification</span>
-            </label>
-          )}
-          <Range label="Marge autour" left="Serrée" right="Large" value={Math.round(opts.margin * 100)} min={0} max={60} onChange={(v) => setOpt("margin", v / 100)} />
-          <div className="label" style={{ marginTop: 14 }}>Effet</div>
-          <Segmented full size="sm" value={opts.style} onChange={(v) => setOpt("style", v)} options={[{ value: "blur", label: "Flou" }, { value: "pixel", label: "Pixels" }, { value: "black", label: "Noir" }]} />
-          <div style={{ height: 8 }} />
-          <Segmented full size="sm" value={opts.shape} onChange={(v) => setOpt("shape", v)} options={[{ value: "ellipse", label: "Ovale" }, { value: "rect", label: "Rectangle" }]} />
-          {opts.style !== "black" && <Range label="Intensité" left="Léger" right="Fort" value={opts.strength} min={0} max={100} onChange={(v) => setOpt("strength", v)} />}
-          {sample && (
-            <button className="cz-sample" onClick={() => seek(sample.f)} data-tip="Gros plan sur une zone, floutée exactement comme à l'export. Clique pour aller à ce moment.">
-              <img src={sample.url} alt="Aperçu du flou" draggable={false} />
-              <span>Aperçu du flou · {clock(sample.f / fps)}</span>
-            </button>
-          )}
-        </div>
-
-        <div className="card card-pad cz-list">
-          <div className="label">Zones trouvées par l'IA</div>
-          {z.tracks.length === 0 && <p className="faint" style={{ fontSize: 12 }}>Aucune zone avec ces réglages.</p>}
-          {listed.map((t) => (
-            <div key={t.id} className={clsx("cz-item", t.hidden && "off", t.f0 <= frame && frame <= t.f1 && "now")}>
-              <button className="cz-item-main" onClick={() => seek(t.f0 + Math.min(Math.round(fps * 0.3), (t.f1 - t.f0) >> 1))}>
-                <span className="cz-dot" style={{ background: CLASS_COLOR[t.cls] }} />
-                <span className="mono">{clock(t.f0 / fps)}</span>
-                <span className="ellipsis">{CLASS_LABEL[t.cls] ?? t.cls}</span>
-                <span className="faint mono">{((t.f1 - t.f0 + 1) / fps).toFixed(1)} s</span>
+        <div className="card cz-panel">
+          <div className="cz-tabs" role="tablist">
+            {([
+              ["zones", "Zones IA", todoCount],
+              ["passages", "Passages", segments.length],
+              ["manual", "À la main", p.manual.length],
+              ["settings", "Réglages", null],
+            ] as [Tab, string, number | null][]).map(([id, label, n]) => (
+              <button key={id} role="tab" aria-selected={tab === id} className={clsx("cz-tab", tab === id && "on")} onClick={() => setTab(id)}>
+                {label}
+                {n != null && n > 0 && <span className="cz-tab-n">{n}</span>}
               </button>
-              {t.hidden ? (
-                <Button size="sm" variant="ghost" iconOnly icon={<Undo2 size={13} />} tip="Flouter à nouveau" onClick={() => { const i = z.hidden.findIndex((h) => h.cls === t.cls && h.f0 <= t.f1 && h.f1 >= t.f0); api.post(`/api/censor/projects/${p.id}/unhide`, { index: i }).then(onChange).catch(onError); }} />
-              ) : (
-                <Button size="sm" variant="ghost" iconOnly icon={<EyeOff size={13} />} tip="Pas une zone intime : ne pas flouter" onClick={() => api.post(`/api/censor/projects/${p.id}/hide`, { track: t.id }).then(onChange).catch(onError)} />
-              )}
-            </div>
-          ))}
-          {z.tracks.length > listed.length && <p className="faint" style={{ fontSize: 12 }}>… et {z.tracks.length - listed.length} autres (utilise la frise).</p>}
+            ))}
+          </div>
+          <div className="cz-panel-body">
+            {tab === "zones" && (
+              <ZonesList
+                tracks={z.tracks}
+                fps={fps}
+                frame={frame}
+                labels={CLASS_LABEL}
+                colors={CLASS_COLOR}
+                onSeek={seek}
+                onValidate={(t) => validate(t as Track)}
+                onUnvalidate={(t) => unvalidate(t as Track)}
+                onRemove={(t) => retire(t as Track)}
+                onRestore={(t) => restore(t as Track)}
+              />
+            )}
+            {tab === "passages" && (
+              <Passages
+                pid={p.id}
+                fps={fps}
+                frames={total}
+                segments={segments}
+                aiOutside={opts.ai_outside !== false}
+                margin={opts.point_margin ?? 2}
+                frame={frame}
+                defaultMode={z.scope_only ? "ai" : "full"}
+                onSeek={seek}
+                onSaved={onChange}
+                onError={onError}
+                setOpt={(k, v) => setOpt(k, v as never)}
+                confirm={ask.confirm}
+                onPut={putSegments}
+              />
+            )}
+            {tab === "manual" && (
+              <div className="cz-manual">
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Trace un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Zone qui suit</Button>
+                  <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} tip={`Trace un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
+                </div>
+                {sel && (
+                  <div className="row cz-sel-actions">
+                    <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessine la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessine la zone à cette image : le suivi repart d'ici (R)"}>Recadrer ici</Button>
+                    <Button size="sm" variant="outline" tip="La zone s'arrête à cette image, plus tôt ou plus tard (E)" onClick={() => finishHere(sel)}>Finir ici</Button>
+                    <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} tip="Supprimer cette zone (X)" onClick={() => removeManual(sel)}>Supprimer</Button>
+                  </div>
+                )}
+                {p.manual.length > 0 ? (
+                  <div className="cz-chips">
+                    {p.manual.map((m, i) => (
+                      <button key={m.id} className={clsx("cz-chip", m.id === selected && "on")} aria-pressed={m.id === selected} onClick={() => { setSelected(m.id); seek(m.keys[0].f); }}>
+                        Zone {i + 1}{m.fixed ? " · fixe" : ""} · {clock(m.keys[0].f / fps)} → {clock(m.keys[m.keys.length - 1].f / fps)}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="faint cz-empty">Une zone ratée par l'IA ? Mets la vidéo au bon moment, appuie sur A (ou « Zone qui suit ») et trace un cadre : elle suit le mouvement toute seule, jusqu'à 10 s. Pour un cadre qui ne bouge pas : « Zone fixe » (Z). Pour flouter tout un passage : I au début, O à la fin.</p>
+                )}
+              </div>
+            )}
+            {tab === "settings" && (
+              <div className="cz-settings">
+                <div className="label">À flouter</div>
+                <div className="cz-classes">
+                  {CLASSES.map((c) => {
+                    const on = opts.classes.includes(c.id);
+                    return (
+                      <button key={c.id} className={clsx("cz-class", on && "on")} aria-pressed={on} onClick={() => setOpt("classes", on ? opts.classes.filter((x) => x !== c.id) : [...opts.classes, c.id])}>
+                        <span className="cz-dot" style={{ background: CLASS_COLOR[c.id] }} />
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <Range label="Sensibilité" left="Strict" right="Au moindre doute" value={opts.sensitivity} min={0} max={100} onChange={(v) => setOpt("sensitivity", v)} />
+                {z.refined && (
+                  <label className="row clip-check" style={{ marginTop: 10 }} data-tip="Une 2e IA (CLIP) revoit chaque zone : celles qu'elle juge non nues (pecs, verre, bras…) ne sont pas floutées">
+                    <Switch checked={opts.verify !== false} onChange={(v) => setOpt("verify", v)} />
+                    <span>2e vérification</span>
+                  </label>
+                )}
+                <Range label="Marge autour" left="Serrée" right="Large" value={Math.round(opts.margin * 100)} min={0} max={60} onChange={(v) => setOpt("margin", v / 100)} />
+                <div className="label" style={{ marginTop: 14 }}>Effet</div>
+                <Segmented full size="sm" value={opts.style} onChange={(v) => setOpt("style", v)} options={[{ value: "blur", label: "Flou" }, { value: "pixel", label: "Pixels" }, { value: "black", label: "Noir" }]} />
+                <div style={{ height: 8 }} />
+                <Segmented full size="sm" value={opts.shape} onChange={(v) => setOpt("shape", v)} options={[{ value: "ellipse", label: "Ovale" }, { value: "rect", label: "Rectangle" }]} />
+                {opts.style !== "black" && <Range label="Intensité" left="Léger" right="Fort" value={opts.strength} min={0} max={100} onChange={(v) => setOpt("strength", v)} />}
+                {sample && (
+                  <button className="cz-sample" onClick={() => seek(sample.f)} data-tip="Gros plan sur une zone, floutée exactement comme à l'export. Clique pour aller à ce moment.">
+                    <img src={sample.url} alt="Aperçu du flou" draggable={false} />
+                    <span>Aperçu du flou · {clock(sample.f / fps)}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {ask.modal}
+      <Modal open={help} onClose={() => setHelp(false)} eyebrow="Vérification" title="Raccourcis clavier" width={560}>
+        <div className="cz-help">
+          {KEYS.map(([k, l]) => (
+            <div key={k} className="cz-help-row">
+              <kbd className="kbd">{k}</kbd>
+              <span>{l}</span>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 }
 
+function boxesAt(tracks: Track[], manual: Manual[], f: number) {
+  const out: { box: Box; color: string; manual?: string; hidden?: boolean }[] = [];
+  for (const t of tracks) {
+    if (t.f0 > f || t.f1 < f) continue;
+    out.push({ box: t.boxes[f - t.f0], color: CLASS_COLOR[t.cls] ?? "#fff", hidden: t.hidden });
+  }
+  for (const m of manual) {
+    const b = manualAt(m, f);
+    if (b) out.push({ box: b, color: CLASS_COLOR.manual, manual: m.id });
+  }
+  return out;
+}
+
 const KEYS: [string, string][] = [
-  ["Espace", "lecture"],
-  ["← →", "image"],
-  ["Maj + ← →", "1 s"],
+  ["Espace / K", "lecture / pause"],
+  ["← →", "image par image"],
+  ["J / L", "10 s avant / après"],
   ["N / P", "zone suivante / précédente"],
-  ["A / Z", "zone qui suit / fixe"],
-  ["R / F", "recadrer / finir ici"],
-  ["Suppr", "pas une zone"],
+  ["V", "valider la zone"],
+  ["X", "retirer la zone"],
   ["B", "aperçu flouté"],
+  ["Maj + ← →", "1 s avant / après"],
+  [", .", "image par image"],
+  ["Début / Fin", "début / fin de la vidéo"],
+  ["[ ]", "vitesse"],
+  ["M", "son"],
+  ["F", "plein écran"],
+  ["I / O", "début / fin d'un passage plein cadre"],
+  ["A", "zone à la main qui suit"],
+  ["Z", "zone à la main fixe"],
+  ["R / E", "recadrer / finir ici (zone choisie)"],
+  ["Suppr", "retirer la zone"],
+  ["Échap", "annuler"],
+  ["?", "cette aide"],
 ];
 
 function manualAt(m: Manual, f: number): Box | null {
@@ -1008,33 +1107,6 @@ function Range({ label, left, right, value, min, max, onChange }: { label: strin
         <span className="spacer" />
         <span>{right}</span>
       </div>
-    </div>
-  );
-}
-
-function Timeline({ marks, total, frame, onSeek }: { marks: { f0: number; f1: number; color: string; segment?: boolean }[]; total: number; frame: number; onSeek: (f: number) => void }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const at = (e: React.PointerEvent) => {
-    const r = ref.current!.getBoundingClientRect();
-    onSeek(((e.clientX - r.left) / r.width) * total);
-  };
-  return (
-    <div
-      className="cz-timeline"
-      ref={ref}
-      role="slider"
-      tabIndex={0}
-      aria-label="Frise de la vidéo"
-      aria-valuemin={0}
-      aria-valuemax={Math.max(0, total - 1)}
-      aria-valuenow={frame}
-      onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture(e.pointerId); at(e); }}
-      onPointerMove={(e) => e.buttons === 1 && at(e)}
-    >
-      {marks.map((m, i) => (
-        <span key={i} className={clsx("cz-mark", m.segment && "seg")} style={{ left: `${(m.f0 / total) * 100}%`, width: `max(2px, ${((m.f1 - m.f0 + 1) / total) * 100}%)`, background: m.segment ? undefined : m.color }} />
-      ))}
-      <span className="cz-head" style={{ left: `${(frame / total) * 100}%` }} />
     </div>
   );
 }

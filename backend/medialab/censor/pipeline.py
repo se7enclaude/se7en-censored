@@ -9,9 +9,10 @@ from typing import Callable
 import numpy as np
 
 from ..errors import Canceled, MediaLabError
+from ..events import bus
 from ..logging_setup import get_logger
 from ..media import ffmpeg
-from . import detect, refine, render
+from . import detect, proxy, refine, render
 from . import project as P
 from . import track as T
 
@@ -69,7 +70,7 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
     if not src_path or not Path(src_path).is_file():
         if not has_url:
             raise MediaLabError("source_missing", "La vidéo de ce projet n'existe plus.")
-        P.patch(pid, {"step": "download"})
+        _step(pid, "download")
         src = _download(project, settings, jctx, progress)
     else:
         src = Path(src_path)
@@ -87,6 +88,7 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
             pass
     P.patch(pid, {"video": video, "step": "detect", "notes": notes, "thumb": str(thumb) if thumb.exists() else None})
     project = apply_scope(pid, video)
+    preview = start_preview(pid, src, video, cache, cancel)  # en parallèle de l'analyse
     lo = 0.15 if has_url else 0.0
     device = "cpu" if getattr(settings.ai, "gpu_id", "auto") == "cpu" else "auto"
     mid = lo + (1 - lo) * 0.9  # l'analyse, puis la 2e passe (courte : seulement autour de la nudité trouvée)
@@ -95,7 +97,7 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
                                progress=lambda f, lbl, eta: progress(lo + (mid - lo) * f, lbl, eta),
                                ranges=scope_ranges(project))
     if meta.get("refined") != refine.REFINE_VERSION:
-        P.patch(pid, {"step": "verify"})
+        _step(pid, "verify")
         try:
             det, meta = refine.run(src, video, cache, det, meta, device=device, cancel=cancel,
                                    progress=lambda f, lbl, eta: progress(mid + (1 - mid) * f, lbl, eta))
@@ -103,6 +105,15 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
             log.warning("Second pass failed: %s", e)
             notes.append(f"La 2e passe n'a pas pu se faire ({e.message}) : les zones viennent de la seule analyse. "
                          "Relance-la plus tard depuis ce projet.")
+            P.patch(pid, {"notes": notes})
+    if preview is not None:
+        preview.wait(lambda f: progress(0.995, f"Préparation de l'aperçu vidéo · {f * 100:.0f} %", None), cancel)
+        if preview.result:
+            P.patch(pid, {"preview": preview.result})
+        elif preview.error and not isinstance(preview.error, Canceled):
+            log.warning("Preview copy failed: %s", preview.error)
+            notes.append("L'aperçu vidéo n'a pas pu être préparé : la vérification se fait image par image. "
+                         "L'export n'est pas concerné.")
             P.patch(pid, {"notes": notes})
     with _zones_lock:
         _zones_cache.pop(pid, None)
@@ -116,6 +127,40 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
     except Canceled:  # « Arrêter » au moment même où l'analyse finit : elle est finie, on la garde
         pass
     return project
+
+
+def _step(pid: str, step: str) -> None:
+    """Étape de l'analyse, montrée tout de suite dans l'interface."""
+    P.patch(pid, {"step": step})
+    bus.publish("censor_project", {"project": pid})
+
+
+# ------------------------------------------------------------------ copie d'aperçu (lecture dans l'appli)
+def start_preview(pid: str, src: Path, video: dict, cache: Path, cancel: threading.Event):
+    """Lance la copie d'aperçu si la vidéo ne se lit pas telle quelle dans l'appli ; None si inutile ou déjà là."""
+    dst = proxy.path_for(cache)
+    project = P.load(pid)
+    if dst.exists():
+        if not (project.get("preview") or {}).get("path"):
+            P.patch(pid, {"preview": proxy.info(dst, video)})
+        return None
+    if not proxy.needed(src):
+        P.patch(pid, {"preview": {"direct": True}})
+        return None
+    return proxy.Background(src, video, dst, cancel)
+
+
+def build_preview(pid: str, cancel: threading.Event, progress: Progress) -> dict:
+    """La copie d'aperçu d'un projet analysé avant qu'elle existe (tâche à part, le projet reste vérifiable)."""
+    project = P.load(pid)
+    src = source_path(project)
+    video = project.get("video") or P.video_info(src)
+    dst = proxy.path_for(P.cache_dir(pid))
+    if not dst.exists() and not proxy.needed(src):
+        return P.patch(pid, {"preview": {"direct": True}, "preview_job": None})
+    res = proxy.info(dst, video) if dst.exists() else proxy.build(
+        src, video, dst, cancel, lambda f: progress(f, f"Préparation de l'aperçu vidéo · {f * 100:.0f} %", None))
+    return P.patch(pid, {"preview": res, "preview_job": None})
 
 
 # ------------------------------------------------------------------ analyse limitée à des passages

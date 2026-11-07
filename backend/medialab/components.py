@@ -13,12 +13,14 @@ publishes them.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,6 +206,112 @@ def status() -> list[dict]:
     items.append({**_spec_dict("aria2"), "installed": bool(ar), "path": ar,
                   "version": _version_of(ar, ["--version"], r"aria2 version (\S+)") if ar else None})
     return items
+
+
+# -------------------------------------------------------------- « à jour » ou « mise à jour disponible »
+CHECK_EVERY = 6 * 3600
+
+
+def _check_file() -> Path:
+    return paths().components / "check.json"
+
+
+def _tag(url: str) -> str | None:
+    """La version d'une release GitHub « latest », lue dans la redirection (sans l'API, limitée à 60/h)."""
+    loc = _pinned(url)
+    m = re.search(r"/releases/download/v?([^/]+)/", loc)
+    return m.group(1) if m else None
+
+
+def _ffmpeg_branch() -> str | None:
+    """Branche de la dernière version de FFmpeg que se7en installerait (« 9.0 ») : BtbN reconstruit chaque jour
+    sous le même nom, seule la branche dit s'il y a vraiment du nouveau."""
+    with _client() as c:
+        rel = c.get(GITHUB_API.format(repo="BtbN/FFmpeg-Builds")).json()
+    names = [a["name"] for a in rel.get("assets", [])]
+    branches = [m.group(1) for n in names if (m := re.fullmatch(r"ffmpeg-n[\d.]+-latest-win64-gpl-shared-([\d.]+)\.zip", n))]
+    return max(branches, key=lambda b: [int(x) for x in b.split(".")]) if branches else None
+
+
+def _vt(v: str | None) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def check(force: bool = False) -> dict:
+    """Dernières versions disponibles (gardées 6 h sur disque) : {id: {latest, checked}}."""
+    try:
+        cached = json.loads(_check_file().read_text("utf-8"))
+    except (OSError, ValueError):
+        cached = {}
+    if not force and cached and time.time() - float(cached.get("_checked") or 0) < CHECK_EVERY:
+        return cached
+    out: dict = {"_checked": time.time()}
+    for cid, fn in (("ytdlp", lambda: _tag(YTDLP_URL)), ("deno", lambda: _tag(DENO_URL)), ("ffmpeg", _ffmpeg_branch)):
+        try:
+            out[cid] = {"latest": fn()}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            log.info("Latest version of %s unknown: %s", cid, e)
+            out[cid] = {"latest": (cached.get(cid) or {}).get("latest")}
+    try:
+        _check_file().parent.mkdir(parents=True, exist_ok=True)
+        _check_file().write_text(json.dumps(out), "utf-8")
+    except OSError:
+        pass
+    return out
+
+
+def _installed_ytdlp() -> str | None:
+    """Version du moteur yt-dlp sur le disque (le zip téléchargé l'emporte au prochain lancement)."""
+    engine = paths().components / "ytdlp" / "yt-dlp.zip"
+    if engine.exists():
+        try:
+            with zipfile.ZipFile(engine) as z:
+                m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", z.read("yt_dlp/version.py").decode("utf-8", "replace"))
+                if m:
+                    return m.group(1)
+        except (OSError, KeyError, zipfile.BadZipFile):
+            pass
+    return ytdlp_version()
+
+
+def freshness(item: dict, latest: dict) -> dict:
+    """« À jour », « mise à jour disponible », « redémarrage requis » ou « géré par Windows » pour un composant."""
+    cid = item["id"]
+    out = {"latest": None, "update_available": False, "managed": None, "restart_required": False,
+           "checked": latest.get("_checked")}
+    if not item.get("installed"):
+        return out
+    if cid == "ytdlp":
+        disk, loaded = _installed_ytdlp(), ytdlp_version()
+        lat = (latest.get("ytdlp") or {}).get("latest")
+        out.update(latest=lat, restart_required=bool(disk and loaded and _vt(disk) > _vt(loaded)),
+                   update_available=bool(lat and disk and _vt(lat) > _vt(disk)))
+    elif cid == "deno":
+        if item.get("runtime") and item["runtime"] != "deno":
+            out["managed"] = "system"  # Node / Bun de Windows : pas à se7en de le mettre à jour
+        else:
+            lat = (latest.get("deno") or {}).get("latest")
+            out.update(latest=lat, update_available=bool(lat and item.get("version") and
+                                                         _vt(lat) > _vt(item["version"])))
+    elif cid == "ffmpeg":
+        mine = str(item.get("path") or "")
+        if not mine.lower().startswith(str(paths().components).lower()) and                 not mine.lower().startswith(str(_bundled_root()).lower()):
+            out["managed"] = "custom"  # un FFmpeg choisi à la main ou du PATH
+        else:
+            lat = (latest.get("ffmpeg") or {}).get("latest")
+            have = _vt(item.get("version"))[:2]
+            out.update(latest=lat, update_available=bool(lat and have and _vt(lat)[:2] > have))
+    return out
+
+
+def _bundled_root() -> Path:
+    from .config import app_root
+    return app_root()
+
+
+def status_checked(force: bool = False) -> list[dict]:
+    latest = check(force)
+    return [{**i, **freshness(i, latest)} for i in status()]
 
 
 def _spec_dict(cid: str) -> dict:

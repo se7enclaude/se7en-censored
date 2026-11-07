@@ -91,6 +91,11 @@ def make_worker(settings):
                                             "eta": eta})
 
         try:
+            if op == "preview":
+                project = pipeline.build_preview(pid, jctx.cancel, progress)
+                bus.publish("censor_project", {"project": pid})
+                return {"file_path": None, "title": project["name"], "platform": "censor", "format": "aperçu",
+                        "duration": (project.get("video") or {}).get("duration"), "meta": {"project": pid}}
             if op == "export":
                 project = pipeline.export(pid, s, jctx.cancel, progress)
                 bus.publish("censor_project", {"project": pid})
@@ -104,7 +109,10 @@ def make_worker(settings):
                     "format": f"{(project.get('stats') or {}).get('zones', 0)} zones",
                     "duration": (project.get("video") or {}).get("duration"), "meta": {"project": pid}}
         except Canceled:
-            if P.exists(pid):
+            if P.exists(pid) and op == "preview":
+                P.patch(pid, {"preview_job": None})
+                bus.publish("censor_project", {"project": pid})
+            elif P.exists(pid):
                 P.patch(pid, {"status": "paused" if op == "analyze" else "review", "step": None})
                 bus.publish("censor_project", {"project": pid})
             raise
@@ -123,7 +131,10 @@ def make_worker(settings):
 
 
 def _failed(pid: str, op: str, error: dict) -> None:
-    P.patch(pid, {"status": "error" if op == "analyze" else "review", "step": None, "error": error})
+    if op == "preview":  # le projet reste vérifiable image par image
+        P.patch(pid, {"preview_job": None, "preview_error": error})
+    else:
+        P.patch(pid, {"status": "error" if op == "analyze" else "review", "step": None, "error": error})
     bus.publish("censor_project", {"project": pid})
 
 
@@ -217,6 +228,25 @@ def register(app: FastAPI, S) -> None:
     async def get(pid: str):
         return P.load(pid)
 
+    @app.post("/api/censor/projects/{pid}/preview")
+    async def preview(pid: str):
+        """Copie d'aperçu d'un projet analysé avant qu'elle existe : préparée à part, le projet reste vérifiable."""
+        project = P.load(pid)
+        pv = project.get("preview") or {}
+        if pv.get("direct") or (pv.get("path") and Path(pv["path"]).is_file()):
+            return {"preview": pv}
+        job_id = project.get("preview_job")
+        if job_id:
+            try:
+                if S.jobs.get(job_id).get("status") in ACTIVE_JOBS:
+                    return {"job": job_id}
+            except MediaLabError:
+                pass
+        src = project["source"].get("path") or ""
+        job = S.jobs.add("censor", src, {"op": "preview", "project": pid}, title=project["name"], platform="censor")
+        P.patch(pid, {"preview_job": job["id"], "preview_error": None})
+        return {"job": job["id"]}
+
     @app.delete("/api/censor/projects/{pid}")
     async def delete(pid: str):
         project = P.load(pid)
@@ -267,7 +297,8 @@ def register(app: FastAPI, S) -> None:
             tracks, meta = pipeline.zones(project)
             hidden = project.get("hidden") or []
             return {"fps": meta["fps"], "frames": meta["frames"],
-                    "tracks": [{**t.to_dict(), "hidden": T.hidden_match(t, hidden)} for t in tracks],
+                    "tracks": [{**t.to_dict(), "hidden": T.hidden_match(t, hidden),
+                                "validated": T.hidden_match(t, project.get("validated") or [])} for t in tracks],
                     "manual": project.get("manual") or [], "hidden": hidden, "cuts": meta.get("cuts", []),
                     "segments": T.clean_segments(project.get("segments")),
                     "refined": bool(meta.get("refined")), "stats": _cov(project),
@@ -337,7 +368,7 @@ def register(app: FastAPI, S) -> None:
                 if f1 < z["f0"]:
                     continue
                 clean.append({"id": str(z.get("id") or i), "f0": z["f0"], "f1": f1, "mode": z["mode"],
-                              "label": str(z.get("label") or "")[:200]})
+                              "label": str(z.get("label") or "")[:200], "validated": bool(z.get("validated"))})
             project["segments"] = clean
             return P.patch(pid, {"segments": clean, "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
@@ -374,6 +405,29 @@ def register(app: FastAPI, S) -> None:
             return P.patch(pid, {"hidden": hidden, "stats": {**(project.get("stats") or {}), **_cov(project)}})
         return await run_in_threadpool(run)
 
+    @app.post("/api/censor/projects/{pid}/validate")
+    async def validate(pid: str, body: HideBody):
+        """Zone de l'IA vérifiée et gardée : elle reste floutée et quitte la liste « à vérifier »."""
+        def run():
+            project = P.load(pid)
+            tracks, _ = pipeline.zones(project)
+            t = next((t for t in tracks if t.id == body.track), None)
+            if t is None:
+                raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
+            done = [v for v in project.get("validated") or [] if not T.hidden_match(t, [v])]
+            return P.patch(pid, {"validated": [*done, {"cls": t.cls, "f0": t.f0, "f1": t.f1}]})
+        return await run_in_threadpool(run)
+
+    @app.post("/api/censor/projects/{pid}/unvalidate")
+    async def unvalidate(pid: str, body: HideBody):
+        def run():
+            project = P.load(pid)
+            tracks, _ = pipeline.zones(project)
+            t = next((t for t in tracks if t.id == body.track), None)
+            keep = [v for v in project.get("validated") or [] if t is None or not T.hidden_match(t, [v])]
+            return P.patch(pid, {"validated": keep})
+        return await run_in_threadpool(run)
+
     @app.get("/api/censor/projects/{pid}/frame")
     async def frame(pid: str, f: int = 0, blur: bool = True, zoom: bool = False):
         """Une image de la vidéo (n° ``f``), floutée comme à l'export ou telle quelle ; ``zoom`` : gros plan sur sa
@@ -388,7 +442,13 @@ def register(app: FastAPI, S) -> None:
             if zoom:
                 return render.sample(src, project["video"], float(meta["fps"]), idx, fb.at(idx), style=o["style"],
                                      shape=o["shape"], strength=int(o["strength"]))
-            return render.preview(src, project["video"], float(meta["fps"]), idx, fb.at(idx), style=o["style"],
+            pv = project.get("preview") or {}
+            if pv.get("path") and Path(pv["path"]).is_file():
+                # la copie d'aperçu : bien plus rapide à lire que l'original 4K, et mêmes couleurs qu'à la lecture
+                src, vid = Path(pv["path"]), {"width": pv["width"], "height": pv["height"]}
+            else:
+                vid = project["video"]
+            return render.preview(src, vid, float(meta["fps"]), idx, fb.at(idx), style=o["style"],
                                   shape=o["shape"], strength=int(o["strength"]), blur=blur)
         data = await run_in_threadpool(run)
         return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})

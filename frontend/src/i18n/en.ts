@@ -292,6 +292,11 @@ export const en: Record<string, string> = {
   // components
   "components.install": "Install",
   "components.update": "Update",
+  "components.upToDate": "Up to date",
+  "components.updateTo": "Update available: {v}",
+  "components.managedSystem": "Managed by Windows",
+  "components.managedCustom": "Custom path",
+  "components.checkNow": "Check components",
   "components.installed": "{name} installed",
   "components.failed": "Installation failed",
   "components.extracting": "Extracting…",

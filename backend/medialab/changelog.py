@@ -2,6 +2,30 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.5.0": {
+        "fr": ["Nouveau lecteur : lecture fluide de tous les films (même 4K HEVC, HDR, DTS) grâce à une copie "
+               "d'aperçu préparée pendant l'analyse, ±10 s (J / L), image par image exacte, vitesse, son, plein écran, "
+               "timecode à taper pour y aller, et beaucoup de raccourcis (?).",
+               "Aperçu flouté instantané, en pause comme en lecture, même en bougeant les réglages.",
+               "Page projet en deux colonnes : le lecteur à gauche, l'export et les onglets Zones IA · Passages · "
+               "À la main · Réglages à droite, sans rien faire défiler.",
+               "Tu tries les propositions : ✓ pour valider une zone ou un passage, ✕ pour retirer (après "
+               "confirmation, elle quitte la liste ; « Retirées » pour revenir en arrière). V et X au clavier, "
+               "I / O pour flouter un passage en plein cadre en regardant.",
+               "Réglages : « Tu as la dernière version » avec la date de vérification, et chaque composant dit s'il "
+               "est à jour : le bouton n'apparaît que s'il y a vraiment une mise à jour."],
+        "en": ["New player: smooth playback of every film (even 4K HEVC, HDR, DTS) through a preview copy made during "
+               "the analysis, ±10 s (J / L), exact frame stepping, speed, sound, full screen, type a timecode to jump, "
+               "and many shortcuts (?).",
+               "Instant blurred preview, paused or playing, even while moving the settings.",
+               "Two-column project page: the player on the left, export and the AI zones · Passages · Manual · "
+               "Settings tabs on the right, no scrolling.",
+               "Sort the proposals: ✓ to validate a zone or passage, ✕ to remove it (after confirmation it leaves the "
+               "list; \"Removed\" to undo). V and X on the keyboard, I / O to blur a full-frame passage while "
+               "watching.",
+               "Settings: \"You have the latest version\" with the check date, and each component says whether it "
+               "is up to date: the button only shows when there really is an update."],
+    },
     "1.4.0": {
         "fr": ["Mode sombre par défaut (changeable dans Réglages › Général).",
                "Vidéos filmées au téléphone (en portrait) : l'export garde une image droite et nette.",

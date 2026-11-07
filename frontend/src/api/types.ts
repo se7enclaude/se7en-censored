@@ -412,6 +412,13 @@ export interface Component {
   version?: string | null;
   size?: number;
   models?: { id: string; file: string; size: number; license: string; author: string; noncommercial: boolean; installed: boolean; purpose: string }[];
+  // avec ?check=1 : dernière version connue (vérifiée au plus toutes les 6 h)
+  latest?: string | null;
+  update_available?: boolean;
+  restart_required?: boolean;
+  managed?: "system" | "custom" | null;
+  checked?: number | null;
+  runtime?: string | null;
 }
 
 export interface LogEntry {
