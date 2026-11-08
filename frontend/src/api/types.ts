@@ -411,6 +411,13 @@ export interface Component {
   path?: string | null;
   version?: string | null;
   size?: number;
+  /** missing | up_to_date | update_available | restart_required | unknown */
+  state?: string;
+  checked_at?: string | null;
+  installed_at?: string | null;
+  pinned?: boolean;
+  external?: boolean;
+  pending_version?: string | null;
   models?: { id: string; file: string; size: number; license: string; author: string; noncommercial: boolean; installed: boolean; purpose: string }[];
   // avec ?check=1 : dernière version connue (vérifiée au plus toutes les 6 h)
   latest?: string | null;

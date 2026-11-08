@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from . import APP_NAME, __version__, ai_assets, components, presets, system, thumbs
+from . import APP_NAME, __version__, ai_assets, component_updates, components, presets, system, thumbs
 from .config import frontend_dist, is_frozen, is_portable, paths
 from .db import Database
 from .downloader import cookies as cookie_store
@@ -238,8 +238,10 @@ def create_app(services: Services) -> FastAPI:
         updater.note_launch()
         if services.shell or is_frozen():
             updater.start_background(_auto_update)
+            component_updates.start_background()
         yield
         updater.stop()
+        component_updates.stop()
         playback.stop_all()
         services.jobs.shutdown()
         monitor().stop()
@@ -389,11 +391,18 @@ def create_app(services: Services) -> FastAPI:
             return await run_in_threadpool(components.status_checked, force)
         return await run_in_threadpool(components.status)
 
+    @app.post("/api/components/check")
+    async def check_comps():
+        def run():
+            component_updates.check(force=True)
+            return components.status()
+        return await run_in_threadpool(run)
+
     @app.post("/api/components/{cid}/install")
-    async def install_comp(cid: str):
+    async def install_comp(cid: str, force: bool = False):
         def run():
             try:
-                components.install(cid)
+                components.install(cid, force=force)
                 if cid == "ffmpeg":
                     ffmpeg.reset_encoders()  # re-detect with the new binary
                 if cid == "realesrgan":

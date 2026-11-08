@@ -1,20 +1,10 @@
-## se7en Censored 1.5.0
+## se7en Censored 1.5.1
 
-- **Nouveau lecteur.** Tous les films se lisent dans l'appli, même en 4K HEVC 10 bits, HDR ou avec son DTS : une
-  copie d'aperçu légère (couleurs corrigées) est préparée pendant l'analyse. ±10 s (J / L), image par image exacte
-  (← → ou , .), vitesse de 0,25× à 4× ([ ]), son (M), plein écran (F ou double-clic), et clic sur le temps pour taper
-  un timecode et y aller.
-- **Aperçu flouté instantané** : le flou s'affiche tout de suite sur la vidéo, en pause comme en lecture, même
-  pendant que tu bouges l'intensité ou la marge. En pause, l'image exacte de l'export prend le relais.
-- **Page projet en deux colonnes** : le lecteur à gauche ; à droite, l'export toujours visible et les onglets
-  **Zones IA · Passages · À la main · Réglages**. Plus besoin de descendre pour les timecodes.
-- **Tu tries les propositions** : ✓ valide une zone ou un passage, ✕ le retire après confirmation (il quitte la
-  liste ; « Retirées » pour revenir en arrière). Au clavier : V valide, X retire, I / O floutent un passage en plein
-  cadre pendant que tu regardes. « ? » affiche tous les raccourcis.
-- **Réglages › Mises à jour** : « Tu as la dernière version », avec la date de vérification gardée d'un lancement à
-  l'autre. **Composants** : chacun dit s'il est à jour ; le bouton n'apparaît que s'il y a vraiment une mise à jour.
+- **Composants à jour, clairement** : chaque composant (FFmpeg, le détecteur IA, Deno et yt-dlp) affiche « À jour (version X, vérifié le …) » ou « Mise à jour disponible ». Un composant à jour n'est plus jamais retéléchargé, et l'appli te prévient quand une nouvelle version sort.
+- **Corrigé** : une mise à jour de FFmpeg ou de Deno était téléchargée mais pas utilisée (le bouton retéléchargeait en boucle) ; un ancien yt-dlp pouvait masquer le plus récent.
+- **Corrigé** : le bandeau « Terminez l'installation » ne propose plus des moteurs dont se7en Censored ne se sert pas.
 
-Tes projets et tes réglages sont gardés. Les projets déjà analysés préparent leur copie d'aperçu à l'ouverture.
+Tes projets et tes réglages sont gardés.
 
 ## Installation
 Installe ou mets à jour depuis **Seventh OS**, ou télécharge le setup ci-dessous.

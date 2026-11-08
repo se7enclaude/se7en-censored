@@ -7,6 +7,8 @@ import { bytes } from "../lib/format";
 import { useApp } from "../store/app";
 import { Button, Progress } from "./ui";
 
+const NEEDED = ["ffmpeg", "aipack"];
+
 /** First-run helper: offers to install required components that are missing. */
 export function SetupBanner() {
   const t = useT();
@@ -19,7 +21,8 @@ export function SetupBanner() {
       return false;
     }
   });
-  const missing = comps.filter((c) => !c.optional && !c.installed);
+  // seulement ce dont se7en Censored se sert (pas les moteurs d'agrandissement ni de sous-titres du code commun)
+  const missing = comps.filter((c) => !c.optional && !c.installed && NEEDED.includes(c.id));
   const busy = missing.find((c) => ["starting", "downloading", "extracting"].includes(progress[c.id]?.state ?? ""));
   const installAll = async () => {
     // one at a time: the backend installs components sequentially

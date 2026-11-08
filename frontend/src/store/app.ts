@@ -263,8 +263,26 @@ function onEvent(ev: AppEvent): void {
         s.loadCapabilities().catch(() => undefined);
         s.toast({ kind: "success", title: translate("components.installed", { name: d.id }) });
       }
+      if (d.state === "up_to_date") {
+        s.loadComponents();
+        s.toast({ kind: "info", title: translate("components.alreadyUpToDate", { name: s.components.find((c) => c.id === d.id)?.name ?? d.id, version: (d as any).version ?? "" }) });
+      }
       if (d.state === "failed") {
         s.toast({ kind: "error", title: translate("components.failed"), body: d.error?.message });
+      }
+      break;
+    }
+    case "component_updates": {
+      // a new version of a component was found by the background check (once per version)
+      const items = (ev.data?.items ?? []) as { id: string; name: string; version?: string; latest?: string }[];
+      s.loadComponents();
+      if (items.length && (!s.settings || s.settings.general.notifications)) {
+        s.toast({
+          kind: "info",
+          title: items.length === 1 ? translate("components.newVersionOne", { name: items[0].name, version: items[0].latest ?? "" }) : translate("components.newVersionMany", { n: items.length }),
+          body: items.map((i) => `${i.name} : ${i.version ?? "?"} → ${i.latest ?? "?"}`).join(" · "),
+          action: { label: translate("components.see"), run: () => s.goSettings("components") },
+        });
       }
       break;
     }

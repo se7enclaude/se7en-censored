@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.5.1": {
+        "fr": ["Composants : chacun affiche « À jour (version X, vérifié le …) » ou « Mise à jour disponible » (FFmpeg, le détecteur IA, Deno et yt-dlp). Un composant à jour n'est plus jamais retéléchargé, et l'appli te prévient quand une nouvelle version sort (vérification toutes les 12 h).", "Corrigé : une mise à jour de FFmpeg ou de Deno était téléchargée mais pas utilisée (le bouton retéléchargeait en boucle).", "Corrigé : un ancien yt-dlp téléchargé pouvait masquer le yt-dlp plus récent fourni avec l'appli.", "Corrigé : le bandeau « Terminez l'installation » ne propose plus des moteurs dont se7en Censored ne se sert pas."],
+        "en": ["Components: each one shows \"Up to date (version X, checked on …)\" or \"Update available\". A component that is up to date is never downloaded again, and the app tells you when a new version is out (checked every 12 h).", "Fixed: an FFmpeg or Deno update was downloaded but not used (the button downloaded it again and again).", "Fixed: an old downloaded yt-dlp could hide the newer one shipped with the app.", "Fixed: the \"Finish the setup\" banner no longer offers engines se7en Censored does not use."],
+    },
     "1.5.0": {
         "fr": ["Nouveau lecteur : lecture fluide de tous les films (même 4K HEVC, HDR, DTS) grâce à une copie "
                "d'aperçu préparée pendant l'analyse, ±10 s (J / L), image par image exacte, vitesse, son, plein écran, "

@@ -85,8 +85,13 @@ def set_overrides(ffmpeg: str = "", realesrgan: str = "", aria2c: str = "") -> N
 
 def _search_dirs(component: str) -> list[Path]:
     from .config import shared_data_dirs
-    return [app_root() / "bin" / component, paths().components / component,
-            *(d / "components" / component for d in shared_data_dirs())]
+    bundled, mine = app_root() / "bin" / component, paths().components / component
+    shared = [d / "components" / component for d in shared_data_dirs()]
+    # A newer copy installed by « Mettre à jour » wins over the one shipped with the app.
+    from . import component_updates
+    if component_updates.installed_by_se7en(component) and mine.exists():
+        return [mine, bundled, *shared]
+    return [bundled, mine, *shared]
 
 
 def _find_in(root: Path, filename: str, depth: int = 4) -> Path | None:
@@ -167,6 +172,31 @@ def ytdlp_version() -> str | None:
         return None
 
 
+def _zip_ytdlp_version(engine: Path) -> str | None:
+    """Version of a downloaded yt-dlp zipapp, read without importing it."""
+    try:
+        with zipfile.ZipFile(engine) as z:
+            text = z.read("yt_dlp/version.py").decode("utf-8", "replace")
+        m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", text)
+        return m.group(1) if m else None
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+
+
+def _bundled_ytdlp_version() -> str | None:
+    """Version of the yt-dlp shipped inside the app (package metadata, read without importing it)."""
+    try:
+        from importlib.metadata import version
+        return version("yt-dlp")
+    except Exception:
+        return None
+
+
+def _newer(a: str | None, b: str | None) -> bool:
+    na, nb = (tuple(int(x) for x in re.findall(r"\d+", v or "")) for v in (a, b))
+    return bool(na) and (not nb or na > nb)
+
+
 def status() -> list[dict]:
     items = []
     ff = find_binary("ffmpeg")
@@ -188,9 +218,13 @@ def status() -> list[dict]:
                   "version": (_version_of(rt[1], ["--version"], r"(?:deno\s+)?v?(\d+\.\d+\.\d+)") if rt else None),
                   "runtime": rt[0] if rt else None})
     engine_zip = paths().components / "ytdlp" / "yt-dlp.zip"
+    loaded = ytdlp_version()
+    zip_version = _zip_ytdlp_version(engine_zip) if engine_zip.exists() else None
     items.append({**_spec_dict("ytdlp"), "installed": True,
-                  "path": str(engine_zip) if engine_zip.exists() else "bundled",
-                  "version": ytdlp_version()})
+                  "path": str(engine_zip) if engine_zip.exists() and zip_version == loaded else "bundled",
+                  "version": loaded,
+                  # downloaded but not active yet: the app must restart to load it
+                  "pending_version": zip_version if _newer(zip_version, loaded) else None})
     for cid, binary, version in (("realcugan", "realcugan-ncnn-vulkan", "20220728"),
                                  ("rife", "rife-ncnn-vulkan", "20221029 · v4.6"),
                                  ("whisper", "whisper-cli", "b5130"), ("llama", "llama-server", "b11284")):
@@ -205,7 +239,8 @@ def status() -> list[dict]:
     ar = find_binary("aria2c")
     items.append({**_spec_dict("aria2"), "installed": bool(ar), "path": ar,
                   "version": _version_of(ar, ["--version"], r"aria2 version (\S+)") if ar else None})
-    return items
+    from . import component_updates
+    return component_updates.annotate(items)
 
 
 # -------------------------------------------------------------- « à jour » ou « mise à jour disponible »
@@ -335,6 +370,7 @@ def _client() -> httpx.Client:
 
 
 _progress_cb: Callable[[int, int], None] | None = None  # set by install() while it holds the lock
+_last_digest: dict[str, str] = {}  # SHA-256 of the last file downloaded for each component
 
 
 def _download(url: str, dest: Path, cid: str, progress: Callable[[int, int], None] | None = None) -> str:
@@ -356,6 +392,7 @@ def _download(url: str, dest: Path, cid: str, progress: Callable[[int, int], Non
                 if progress:
                     progress(done, total)
     os.replace(tmp, dest)
+    _last_digest[cid] = h.hexdigest()
     return h.hexdigest()
 
 
@@ -408,10 +445,22 @@ def ensure(cid: str, progress: Callable[[int, int], None] | None = None) -> bool
     return is_installed(cid)
 
 
-def install(cid: str, progress: Callable[[int, int], None] | None = None, wait: bool = False) -> dict:
+def install(cid: str, progress: Callable[[int, int], None] | None = None, wait: bool = False,
+            force: bool = False) -> dict:
+    """Install a missing component, or update one whose newer version is known.
+
+    A component that is already up to date is never downloaded again (``force`` overrides it,
+    e.g. to repair a broken copy).
+    """
     global _progress_cb
     if cid not in SPECS:
         raise MediaLabError("unknown_component", f"Unknown component {cid}")
+    if not force and is_installed(cid):
+        current = next((s for s in status() if s["id"] == cid), None)
+        if current and current.get("state") in ("up_to_date", "restart_required"):
+            bus.publish("component", {"id": cid, "state": "up_to_date", "version": current.get("version")})
+            log.info("Component %s already up to date (%s): nothing downloaded", cid, current.get("version"))
+            return current
     if not _install_lock.acquire(blocking=wait, timeout=1800 if wait else -1):
         raise MediaLabError("busy", "Another component is being installed.", "Wait for it to finish.", True)
     if wait and is_installed(cid):  # installed by whoever held the lock
@@ -426,8 +475,16 @@ def install(cid: str, progress: Callable[[int, int], None] | None = None, wait: 
          "rife": _install_rife, "aipack": _install_aipack, "whisper": _install_whisper,
          "llama": _install_llama}[cid]()
         _cache.clear()
-        bus.publish("component", {"id": cid, "state": "installed"})
-        log.info("Component %s installed", cid)
+        if cid == "ytdlp":
+            ver = _zip_ytdlp_version(paths().components / "ytdlp" / "yt-dlp.zip")
+        else:
+            ver = next((s.get("version") for s in status() if s["id"] == cid), None)
+        from . import component_updates
+        component_updates.record_install(cid, ver, _last_digest.get(cid))
+        _cache.clear()
+        if cid != "ytdlp":
+            bus.publish("component", {"id": cid, "state": "installed", "version": ver})
+        log.info("Component %s installed (%s)", cid, ver)
         return next(s for s in status() if s["id"] == cid)
     except MediaLabError as e:
         bus.publish("component", {"id": cid, "state": "failed", "error": e.to_dict()})
@@ -643,5 +700,21 @@ def activate_engine_override() -> None:
     Must run before anything imports ``yt_dlp``.
     """
     engine = paths().components / "ytdlp" / "yt-dlp.zip"
-    if engine.exists() and zipfile.is_zipfile(engine) and "yt_dlp" not in sys.modules:
-        sys.path.insert(0, str(engine))
+    if not engine.exists() or "yt_dlp" in sys.modules:
+        return
+    if not zipfile.is_zipfile(engine):
+        engine.unlink(missing_ok=True)
+        return
+    # After an app update the bundled engine may be newer than the one downloaded earlier:
+    # the older download must not hide it.
+    mine, bundled = _zip_ytdlp_version(engine), _bundled_ytdlp_version()
+    if bundled and not _newer(mine, bundled):
+        log.info("Bundled yt-dlp %s is as new as the downloaded %s: using the bundled one", bundled, mine)
+        try:
+            engine.unlink()
+            from . import component_updates
+            component_updates.forget_install("ytdlp")
+        except OSError:
+            pass
+        return
+    sys.path.insert(0, str(engine))
