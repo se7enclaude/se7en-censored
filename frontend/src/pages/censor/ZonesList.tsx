@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { Check, Undo2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Segmented } from "../../components/ui";
 import { tc } from "./Passages";
 
@@ -16,10 +16,12 @@ type Filter = "todo" | "ok" | "off";
 
 /** Les zones proposées par l'IA, à trier : on valide celles qui sont justes, on retire les autres (après
  *  confirmation, elles quittent la liste ; « Retirées » permet de revenir en arrière). */
-export function ZonesList({ tracks, fps, frame, labels, colors, onSeek, onValidate, onUnvalidate, onRemove, onRestore }: {
+/** ``now`` : identifiants des zones présentes à l'image en cours (séparés par des espaces). Ne change qu'au début ou à la
+ *  fin d'une zone, pas à chaque image : la liste ne se redessine pas pendant la lecture. */
+export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, colors, onSeek, onValidate, onUnvalidate, onRemove, onRestore }: {
   tracks: ZoneItem[];
   fps: number;
-  frame: number;
+  now: string;
   labels: Record<string, string>;
   colors: Record<string, string>;
   onSeek: (f: number) => void;
@@ -37,7 +39,8 @@ export function ZonesList({ tracks, fps, frame, labels, colors, onSeek, onValida
   const list = groups[filter];
   const shown = list.slice(0, 500);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const current = shown.find((t) => t.f0 <= frame && frame <= t.f1)?.id;
+  const nowIds = new Set(now.split(" "));
+  const current = shown.find((t) => nowIds.has(t.id))?.id;
   // la zone de l'image en cours reste visible dans la liste
   useEffect(() => {
     if (!current) return;
@@ -87,4 +90,4 @@ export function ZonesList({ tracks, fps, frame, labels, colors, onSeek, onValida
       </div>
     </div>
   );
-}
+});

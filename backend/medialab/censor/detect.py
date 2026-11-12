@@ -7,6 +7,7 @@ tout réanalyser. L'analyse est reprise là où elle s'était arrêtée (sauvega
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -76,8 +77,8 @@ def decode(out: np.ndarray, w: int, h: int, min_score: float = RAW_MIN_SCORE) ->
 class Detector:
     def __init__(self, device: str = "auto", progress: Callable[[int, int], None] | None = None) -> None:
         path = ai_assets.ensure(MODEL, progress)
-        self.sess, self.lock = onnx_rt.session(path, device)
-        self.input = self.sess.get_inputs()[0].name
+        self.path, self.device = path, device
+        self.input = onnx_rt.input_meta(path, device)[0].name
         self.gpu = onnx_rt.uses_gpu(device)
 
     def run(self, rgb: np.ndarray, mirror: bool = False) -> list[tuple[int, float, list[float]]]:
@@ -87,14 +88,12 @@ class Detector:
         canvas = np.zeros((ph, pw, 3), np.uint8)
         canvas[:h, :w] = rgb
         x = canvas.transpose(2, 0, 1)[None].astype(np.float32) * (1 / 255.0)
-        with self.lock:
-            out = self.sess.run(None, {self.input: x})[0][0]
+        out = onnx_rt.infer(self.path, {self.input: x}, self.device)[0][0]
         res = decode(out, w, h)
         if mirror:
             canvas[:h, :w] = rgb[:, ::-1]
             x = canvas.transpose(2, 0, 1)[None].astype(np.float32) * (1 / 255.0)
-            with self.lock:
-                out = self.sess.run(None, {self.input: x})[0][0]
+            out = onnx_rt.infer(self.path, {self.input: x}, self.device)[0][0]
             for c, s, b in decode(out, w, h):
                 res.append((c, s, [1 - b[2], b[1], 1 - b[0], b[3]]))
             res = _merge(res)
@@ -187,16 +186,30 @@ def load(cache: Path) -> tuple[dict, dict] | None:
     npz, meta = _store(cache)
     if not (npz.exists() and meta.exists()):
         return None
-    m = json.loads(meta.read_text("utf-8"))
-    if m.get("v") not in (1, DETECT_VERSION):
+    try:
+        m = json.loads(meta.read_text("utf-8"))
+    except (OSError, ValueError):  # fichier vide ou abîmé (coupure pendant l'écriture) : pas de cache
         return None
-    with np.load(npz) as z:
-        det = {k: z[k] for k in ("f", "c", "s", "b")}
-        det["t"] = z["t"] if "t" in z.files else np.zeros(len(det["f"]), np.int8)
-        if "v" in z.files:  # 2e passe (refine.py) : note de vérification, changements de plan
-            det["v"] = z["v"]
-            det["cuts"] = z["cuts"]
+    if not isinstance(m, dict) or m.get("v") not in (1, DETECT_VERSION):
+        return None
+    try:
+        with np.load(npz) as z:
+            det = {k: z[k] for k in ("f", "c", "s", "b")}
+            det["t"] = z["t"] if "t" in z.files else np.zeros(len(det["f"]), np.int8)
+            if "v" in z.files:  # 2e passe (refine.py) : note de vérification, changements de plan
+                det["v"] = z["v"]
+                det["cuts"] = z["cuts"]
+    except Exception as e:  # npz abîmé (BadZipFile, EOFError, clé manquante…)
+        log.warning("Detection cache unreadable (%s): analysing again", e)
+        return None
     return det, m
+
+
+def _write_meta(mf: Path, meta: dict) -> None:
+    """Écriture atomique : un fichier temporaire, puis remplacement (jamais de JSON à moitié écrit)."""
+    tmp = mf.with_name(mf.name + ".tmp")
+    tmp.write_text(json.dumps(meta), "utf-8")
+    os.replace(tmp, mf)
 
 
 def save_arrays(cache: Path, det: dict, meta: dict) -> None:
@@ -204,7 +217,7 @@ def save_arrays(cache: Path, det: dict, meta: dict) -> None:
     tmp = npz.with_name("detections.tmp.npz")
     np.savez_compressed(tmp, **det)
     tmp.replace(npz)
-    mf.write_text(json.dumps(meta), "utf-8")
+    _write_meta(mf, meta)
 
 
 def _save(cache: Path, rows: list, meta: dict) -> None:
@@ -221,7 +234,7 @@ def _save(cache: Path, rows: list, meta: dict) -> None:
     tmp = npz.with_name("detections.tmp.npz")
     np.savez_compressed(tmp, f=f, c=c, s=s, b=b, t=t)
     tmp.replace(npz)
-    mf.write_text(json.dumps(meta), "utf-8")
+    _write_meta(mf, meta)
 
 
 def merge_ranges(ranges) -> list[list[int]]:

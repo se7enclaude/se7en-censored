@@ -44,8 +44,8 @@ def square(rgb: np.ndarray, box: Sequence[float], context: float = 1.0) -> np.nd
 class Verifier:
     def __init__(self, device: str = "auto", progress: Callable[[int, int], None] | None = None) -> None:
         path = ai_assets.ensure(MODEL, progress)
-        self.sess, self.lock = onnx_rt.session(path, device)
-        self.input = self.sess.get_inputs()[0].name
+        self.path, self.device = path, device
+        self.input = onnx_rt.input_meta(path, device)[0].name
         with np.load(_TEXT) as z:
             self.text = z["emb"].astype(np.float32)
             self.nude = z["nude"].astype(bool)
@@ -55,8 +55,8 @@ class Verifier:
         out = []
         for i in range(0, len(images), 32):
             x = ((images[i:i + 32].astype(np.float32) / 255 - _MEAN) / _STD).transpose(0, 3, 1, 2)
-            with self.lock:
-                e = self.sess.run(["image_embeds"], {self.input: np.ascontiguousarray(x)})[0].astype(np.float32)
+            e = onnx_rt.infer(self.path, {self.input: np.ascontiguousarray(x)}, self.device,
+                              ["image_embeds"])[0].astype(np.float32)
             e /= np.linalg.norm(e, axis=1, keepdims=True) + 1e-9
             logits = 100.0 * e @ self.text.T
             logits -= logits.max(1, keepdims=True)

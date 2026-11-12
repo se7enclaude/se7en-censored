@@ -1,10 +1,31 @@
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 # Isolated data dir for the whole test session (must be set before importing medialab).
 _TMP = tempfile.mkdtemp(prefix="medialab-test-")
+
+
+def _cleanup() -> None:
+    """Dossier de test supprimé en fin de session (journaux et bases fermés d'abord : Windows refuse de supprimer
+    un fichier ouvert)."""
+    import gc
+    import logging
+    import sqlite3
+    logging.shutdown()
+    for o in gc.get_objects():
+        if isinstance(o, sqlite3.Connection):
+            try:
+                o.close()
+            except Exception:  # noqa: BLE001
+                pass
+    shutil.rmtree(_TMP, ignore_errors=True)
+
+
+atexit.register(_cleanup)
 os.environ["MEDIALAB_DATA_DIR"] = _TMP
 os.environ["SE7ENCENSORED_DATA_DIR"] = _TMP  # le nom lu par config.paths()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

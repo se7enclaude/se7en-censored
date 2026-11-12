@@ -172,6 +172,21 @@ def test_what_changed_is_shown_once_after_an_update(monkeypatch, tmp_path):
     assert "updated_from" not in u.snapshot()
 
 
+def test_old_installers_removed_after_an_update(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(upd, "paths", lambda: SimpleNamespace(data=tmp_path, settings=tmp_path / "settings.json"))
+    up = tmp_path / "updates"
+    up.mkdir()
+    for n in ("se7en-Update-0.0.1.exe", "se7en-Update-0.0.2.exe.part", "keep.log"):
+        (up / n).write_bytes(b"x")
+    (tmp_path / "version.txt").write_text(__version__)
+    upd.Updater().note_launch()  # même version : rien n'est supprimé
+    assert (up / "se7en-Update-0.0.1.exe").exists()
+    (tmp_path / "version.txt").write_text("0.0.1")
+    upd.Updater().note_launch()
+    assert sorted(f.name for f in up.iterdir()) == ["keep.log"]
+
+
 def test_update_config_written_with_a_bom_is_read(monkeypatch, tmp_path):
     # PowerShell's Set-Content -Encoding utf8 starts the file with a BOM: it must not switch updates off
     monkeypatch.delenv("SE7EN_UPDATE_URL", raising=False)

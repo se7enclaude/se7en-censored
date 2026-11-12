@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { Check, Clock, FileText, ImageIcon, ScanText, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { api, token } from "../../api/client";
 import { Button, Modal, Segmented, Switch } from "../../components/ui";
 
@@ -69,14 +69,15 @@ export function parseTc(v: string): number | null {
   return h * 3600 + mi * 60 + sec;
 }
 
-export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame, defaultMode = "full", onSeek, onSaved, onError, setOpt, confirm, onPut }: {
+/** ``now`` : identifiants des passages présents à l'image en cours (séparés par des espaces). */
+export const Passages = memo(function Passages({ pid, fps, frames, segments, aiOutside, margin, now, defaultMode = "full", onSeek, onSaved, onError, setOpt, confirm, onPut }: {
   pid: string;
   fps: number;
   frames: number;
   segments: Segment[];
   aiOutside: boolean;
   margin: number;
-  frame: number;
+  now: string;
   defaultMode?: SegmentMode;
   onSeek: (f: number) => void;
   onSaved: () => void;
@@ -106,6 +107,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
       run: () => save(segments.filter((x) => x.id !== g.id)),
     });
   const todo = segments.filter((g) => !g.validated).length;
+  const nowIds = new Set(now.split(" "));
 
   return (
     <div className="cz-passages">
@@ -124,7 +126,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
         <>
           <div className="cz-seglist">
             {segments.map((s) => (
-              <div key={s.id} className={clsx("cz-seg", s.f0 <= frame && frame <= s.f1 && "now", !s.validated && "todo")}>
+              <div key={s.id} className={clsx("cz-seg", nowIds.has(s.id) && "now", !s.validated && "todo")}>
                 <button className="cz-seg-time mono" onClick={() => onSeek(s.f0)} title={s.label || undefined}>
                   {tc(s.f0 / fps)} → {tc((s.f1 + 1) / fps)}
                   {!s.validated && <span className="cz-badge">à vérifier</span>}
@@ -144,7 +146,7 @@ export function Passages({ pid, fps, frames, segments, aiOutside, margin, frame,
       <ImportTimecodes open={open} onClose={() => setOpen(false)} pid={pid} margin={margin} defaultMode={defaultMode} setMargin={(v) => setOpt("point_margin", v)} onAdd={(rows) => add(rows).then(() => { setOpen(false); onSaved(); }).catch(onError)} onError={onError} />
     </div>
   );
-}
+});
 
 function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, onAdd, onError }: {
   open: boolean;

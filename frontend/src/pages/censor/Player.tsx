@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ChevronLeft, ChevronRight, Eye, EyeOff, Gauge, Loader2, Maximize2, Pause, Play, RotateCcw, RotateCw, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
-import { forwardRef, ReactNode, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, memo, ReactNode, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Button, Switch } from "../../components/ui";
 import { parseTc, tc } from "./Passages";
 
@@ -239,14 +239,23 @@ function Timeline({ marks, total, frame, fps, onSeek }: { marks: Mark[]; total: 
       onPointerMove={(e) => { const f = at(e); setHover(f); if (e.buttons === 1) onSeek(f); }}
       onPointerLeave={() => setHover(null)}
     >
-      {marks.map((m, i) => (
-        <span key={i} className={clsx("cz-mark", `is-${m.kind}`)} style={{ left: `${(m.f0 / total) * 100}%`, width: `max(2px, ${((m.f1 - m.f0 + 1) / total) * 100}%)`, background: m.kind === "segment" ? undefined : m.color }} />
-      ))}
+      <Marks marks={marks} total={total} />
       <span className="cz-head" style={{ left: `${(frame / total) * 100}%` }} />
       {hover !== null && <span className="cz-hover mono" style={{ left: `${(hover / total) * 100}%` }}>{tc(hover / fps)}</span>}
     </div>
   );
 }
+
+/** Repères de la frise : redessinés seulement quand les zones changent, pas à chaque image lue. */
+const Marks = memo(function Marks({ marks, total }: { marks: Mark[]; total: number }) {
+  return (
+    <>
+      {marks.map((m, i) => (
+        <span key={i} className={clsx("cz-mark", `is-${m.kind}`)} style={{ left: `${(m.f0 / total) * 100}%`, width: `max(2px, ${((m.f1 - m.f0 + 1) / total) * 100}%)`, background: m.kind === "segment" ? undefined : m.color }} />
+      ))}
+    </>
+  );
+});
 
 /** Flou affiché tout de suite par-dessus la vidéo (pendant la lecture, en pause, en bougeant les réglages). Proche
  *  du rendu de l'export ; l'image exacte du moteur le remplace en pause. */

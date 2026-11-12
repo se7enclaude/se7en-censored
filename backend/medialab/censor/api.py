@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..errors import Canceled, MediaLabError
 from ..events import bus
 from ..logging_setup import get_logger
+from ..upscale import onnx_rt
 from . import pipeline, render
 from . import project as P
 from . import track as T
@@ -77,9 +78,28 @@ class UnhideBody(BaseModel):
     index: int
 
 
+_running = [0]  # tâches « censor » en cours : la mémoire du GPU est rendue quand la dernière finit
+_running_lock = threading.Lock()
+
+
 def make_worker(settings):
     """Tâche « censor » : analyse d'une vidéo, ou export de la version floutée."""
     def worker(job: dict, jctx) -> dict:
+        with _running_lock:
+            _running[0] += 1
+        try:
+            return _work(job, jctx)
+        finally:
+            with _running_lock:
+                _running[0] -= 1
+                last = _running[0] == 0
+            if last:
+                try:
+                    onnx_rt.release()
+                except Exception:  # pragma: no cover
+                    log.exception("AI release failed")
+
+    def _work(job: dict, jctx) -> dict:
         s = settings.get()
         opts = dict(job.get("options") or {})
         pid = str(opts.get("project") or "")
@@ -474,8 +494,8 @@ def register(app: FastAPI, S) -> None:
         project = P.load(pid)
         f = (project.get("export") or {}).get("file")
         if f and Path(f).exists():
-            import subprocess
-            threading.Thread(target=lambda: subprocess.run(["explorer", "/select,", f]), daemon=True).start()
+            from ..system import explorer
+            explorer(f'/select,"{f}"')  # hors du job de se7en : la fenêtre reste ouverte après se7en
             return {"path": f}
         d = P.output_dir(project)
         threading.Thread(target=lambda: os.startfile(str(d)), daemon=True).start()  # noqa: S606

@@ -35,6 +35,76 @@ def request_quit(delay: float = 0.0) -> None:
     threading.Timer(delay, go).start() if delay else go()
 
 
+# ------------------------------------------------------------------ processus enfants
+_job = None  # gardé ouvert toute la vie du processus : sa fermeture (même forcée) arrête les enfants
+BREAKAWAY = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+
+
+def kill_children_on_exit() -> bool:
+    """Windows : rattache se7en à un Job Object « tuer à la fermeture ». Si se7en est fermé de force,
+    ffmpeg, whisper-cli, llama-server… s'arrêtent avec lui au lieu de rester orphelins. Sans effet ailleurs ;
+    un échec n'empêche jamais le démarrage."""
+    global _job
+    if sys.platform != "win32" or _job is not None:
+        return False
+    try:
+        from ctypes import wintypes
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOperationCount", "WriteOperationCount",
+                                                          "OtherOperationCount", "ReadTransferCount",
+                                                          "WriteTransferCount", "OtherTransferCount")]
+
+        class BASIC_LIMIT(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class EXTENDED_LIMIT(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", BASIC_LIMIT), ("IoInfo", IO_COUNTERS),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise OSError(ctypes.get_last_error(), "CreateJobObject")
+        info = EXTENDED_LIMIT()
+        # KILL_ON_JOB_CLOSE (0x2000) ; BREAKAWAY_OK (0x800) : l'assistant de mise à jour et l'Explorateur en sortent
+        info.BasicLimitInformation.LimitFlags = 0x2000 | 0x800
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):  # 9 : ExtendedLimit
+            err = ctypes.get_last_error()
+            k32.CloseHandle(job)
+            raise OSError(err, "SetInformationJobObject")
+        if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
+            err = ctypes.get_last_error()
+            k32.CloseHandle(job)
+            raise OSError(err, "AssignProcessToJobObject")
+        _job = job
+        return True
+    except Exception as e:  # noqa: BLE001 — jamais bloquant
+        log.info("Child processes will not be stopped with se7en (job object unavailable: %s)", e)
+        return False
+
+
+def explorer(args: str) -> None:
+    """Lance l'Explorateur hors du job de se7en (sinon il serait fermé avec se7en)."""
+    exe = os.path.join(os.environ.get("SystemRoot", "C:" + os.sep + "Windows"), "explorer.exe")
+    cmd = f'"{exe}" {args}'
+    try:
+        subprocess.Popen(cmd, creationflags=BREAKAWAY, close_fds=True)
+    except OSError:  # breakaway refusé par un job parent
+        subprocess.Popen(cmd, close_fds=True)
+
+
 def open_path(path: str, reveal: bool = False) -> None:
     p = Path(path)
     if not p.exists():
@@ -42,7 +112,13 @@ def open_path(path: str, reveal: bool = False) -> None:
                             "It may have been moved or deleted.")
     if sys.platform == "win32":
         if reveal and p.is_file():
-            subprocess.Popen(["explorer", "/select,", str(p)])
+            explorer(f'/select,"{p}"')
+        elif p.is_file():
+            # par l'Explorateur, hors du « job » de se7en : le lecteur ouvert reste ouvert quand se7en se ferme
+            try:
+                explorer(f'"{p}"')
+            except OSError:
+                os.startfile(str(p))  # noqa: S606 — user-initiated
         else:
             os.startfile(str(p))  # noqa: S606 — user-initiated
     elif sys.platform == "darwin":

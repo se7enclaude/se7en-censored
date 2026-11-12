@@ -55,8 +55,8 @@ def lines(img: Image.Image) -> list[np.ndarray]:
 class Reader:
     def __init__(self, progress: Callable[[int, int], None] | None = None) -> None:
         path = ai_assets.ensure(MODEL, progress)
-        self.sess, self.lock = onnx_rt.session(path, "cpu")
-        self.input = self.sess.get_inputs()[0].name
+        self.path = path
+        self.input = onnx_rt.input_meta(path, "cpu")[0].name
 
     def line(self, band: np.ndarray) -> str:
         h, w = band.shape
@@ -64,8 +64,7 @@ class Reader:
         im = np.asarray(Image.fromarray(band.astype(np.uint8)).convert("RGB").resize((nw, HEIGHT), Image.BICUBIC),
                         np.float32)
         x = ((im / 255 - 0.5) / 0.5).transpose(2, 0, 1)[None]
-        with self.lock:
-            y = self.sess.run(None, {self.input: np.ascontiguousarray(x)})[0][0]
+        y = onnx_rt.infer(self.path, {self.input: np.ascontiguousarray(x)}, "cpu")[0][0]
         text, prev = [], 0
         for i in y.argmax(1):  # décodage CTC : on garde un caractère quand il change, sans les « rien »
             if i != prev and 0 < i < len(CHARS):

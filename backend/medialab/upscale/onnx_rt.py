@@ -100,15 +100,71 @@ def run(path: Path, feeds: dict[str, np.ndarray], device: str = "auto") -> list[
         try:
             return sess.run(None, feeds)
         except Exception as e:
-            try:
-                low = str(e).lower()
-            except Exception:  # some localized driver messages are not valid UTF-8
-                low = repr(e).lower()
-            if any(k in low for k in _OOM):
+            if _is_oom(e):
                 raise MediaLabError("gpu_out_of_memory", "The GPU ran out of video memory.",
-                                    "se7en retries automatically with smaller tiles.", True, str(e)[-1500:]) from e
+                                    "se7en retries automatically with smaller tiles.", True, _text(e)[-1500:]) from e
             raise MediaLabError("ai_failed", "The AI model failed on this image.", "Retry; if it persists, choose "
-                                "another model.", True, str(e)[-1500:]) from e
+                                "another model.", True, _text(e)[-1500:]) from e
+
+
+def _text(e: BaseException) -> str:
+    try:
+        return str(e)
+    except Exception:  # some localized driver messages are not valid UTF-8
+        return repr(e)
+
+
+def _is_oom(e: BaseException) -> bool:
+    low = _text(e).lower()
+    return any(k in low for k in _OOM)
+
+
+_force_cpu: set[str] = set()  # modèles repassés sur le processeur après un décrochage du GPU (jusqu'à release())
+
+
+def _drop(path: Path) -> None:
+    """Retire du cache les sessions de ce modèle (une session plantée ne se relève pas)."""
+    with _lock:
+        for k in [k for k in _sessions if k[0] == str(path)]:
+            _sessions.pop(k, None)
+
+
+def infer(path: Path, feeds: dict[str, np.ndarray], device: str = "auto",
+          outputs: list[str] | None = None) -> list[np.ndarray]:
+    """``sess.run`` robuste : si le GPU décroche, la session est recréée et l'inférence refaite une fois,
+    puis sur le processeur en dernier recours. Lève une ``MediaLabError`` claire sinon."""
+    dev = "cpu" if str(path) in _force_cpu else device
+    last: BaseException | None = None
+    for attempt in range(3):
+        if attempt == 2:
+            if not uses_gpu(dev):
+                break  # déjà sur le processeur : rien de plus à tenter
+            dev = "cpu"
+        try:
+            sess, lock = session(path, dev)
+            with (_gpu_lock if uses_gpu(dev) else lock):
+                out = sess.run(outputs, feeds)
+            if attempt == 2:
+                log.warning("AI model %s moved to the CPU after a GPU failure", Path(path).name)
+                _force_cpu.add(str(path))
+            return out
+        except MediaLabError as e:
+            if e.code != "model_load_failed":
+                raise
+            last = e
+        except Exception as e:  # session morte (GPU décroché, message Windows non UTF-8…)
+            last = e
+            log.warning("AI model %s failed (attempt %d): %s", Path(path).name, attempt + 1, _text(e)[-300:])
+        _drop(path)
+    if isinstance(last, MediaLabError):
+        raise last
+    if last is not None and _is_oom(last):
+        raise MediaLabError("gpu_out_of_memory", "La carte graphique n'a plus assez de mémoire.",
+                            "Ferme les autres logiciels qui l'utilisent (jeux, montage), puis relance.", True,
+                            _text(last)[-1500:]) from last
+    raise MediaLabError("ai_failed", "L'IA a échoué sur cette vidéo, même après une nouvelle tentative.",
+                        "Relance ; si ça continue, redémarre l'appli ou choisis le processeur dans les réglages.",
+                        True, _text(last)[-1500:] if last else "") from last
 
 
 def input_meta(path: Path, device: str = "auto") -> list:
@@ -123,6 +179,7 @@ def release(idle_seconds: float = 0) -> int:
             return 0
         n = len(_sessions)
         _sessions.clear()
+        _force_cpu.clear()
     if n:
         log.info("Released %d AI model(s) from memory", n)
     return n

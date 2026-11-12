@@ -10,7 +10,7 @@ import { useApp } from "../store/app";
 import { useConfirm } from "./censor/Confirm";
 import { Passages, Segment, tc } from "./censor/Passages";
 import { LiveBlur, Mark, Player, PlayerApi } from "./censor/Player";
-import { ZonesList } from "./censor/ZonesList";
+import { ZoneItem, ZonesList } from "./censor/ZonesList";
 import { ScopeField } from "./censor/ScopeField";
 import "../styles/clip.css";
 import "../styles/censor.css";
@@ -576,7 +576,10 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   const blurred = useMemo(() => blurredAt(frame), [blurredAt, frame]);
 
   // image exacte du moteur, en pause, quand on ne bouge plus (le flou en direct la précède)
-  const optsKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden, segments, opts.ai_outside]);
+  const optsKey = useMemo(
+    () => JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden, segments, opts.ai_outside]),
+    [opts.style, opts.shape, opts.strength, opts.margin, opts.sensitivity, opts.classes, p.manual, p.hidden, segments, opts.ai_outside],
+  );
   useEffect(() => {
     setStillReady(false);
     if (playing || (src && !preview)) {
@@ -589,7 +592,10 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
 
   // gros plan flouté d'une zone (réglage de l'intensité) : la zone de l'image en cours, sinon la plus longue
   const [sample, setSample] = useState<{ f: number; url: string } | null>(null);
-  const fxKey = JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden, segments, opts.ai_outside]);
+  const fxKey = useMemo(
+    () => JSON.stringify([opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden, segments, opts.ai_outside]),
+    [opts.style, opts.shape, opts.strength, opts.margin, p.manual, p.hidden, segments, opts.ai_outside],
+  );
   useEffect(() => {
     if (playing || tab !== "settings") return;
     let f: number | null = null;
@@ -674,6 +680,23 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     api.post(`/api/censor/projects/${p.id}/unhide`, { index: i }).then(onChange).catch(onError);
   };
   const atFrame = (list: Track[]) => list.find((t) => t.f0 <= frame && frame <= t.f1);
+
+  // listes (React.memo) : des fonctions stables et seulement ce qui change vraiment, pas l'image en cours
+  const latest = useRef({ validate, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm });
+  latest.current = { validate, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm };
+  const panel = useMemo(() => ({
+    onValidate: (t: ZoneItem) => latest.current.validate(t as Track),
+    onUnvalidate: (t: ZoneItem) => latest.current.unvalidate(t as Track),
+    onRemove: (t: ZoneItem) => latest.current.retire(t as Track),
+    onRestore: (t: ZoneItem) => latest.current.restore(t as Track),
+    onSaved: () => latest.current.onChange(),
+    onError: (e: unknown) => latest.current.onError(e),
+    setOpt: (k: "ai_outside" | "point_margin", v: boolean | number) => latest.current.setOpt(k, v as never),
+    confirm: (a: { title: string; body: string; ok: string; run: () => void }) => latest.current.confirm(a),
+    onPut: (next: Segment[]) => latest.current.putSegments(next),
+  }), []);
+  const nowZones = useMemo(() => z.tracks.filter((t) => t.f0 <= frame && frame <= t.f1).map((t) => t.id).join(" "), [z.tracks, frame]);
+  const nowSegs = useMemo(() => segments.filter((g) => g.f0 <= frame && frame <= g.f1).map((g) => g.id).join(" "), [segments, frame]);
 
   // dessin d'une zone sur l'image
   const rel = (e: React.PointerEvent) => {
@@ -937,14 +960,14 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               <ZonesList
                 tracks={z.tracks}
                 fps={fps}
-                frame={frame}
+                now={nowZones}
                 labels={CLASS_LABEL}
                 colors={CLASS_COLOR}
                 onSeek={seek}
-                onValidate={(t) => validate(t as Track)}
-                onUnvalidate={(t) => unvalidate(t as Track)}
-                onRemove={(t) => retire(t as Track)}
-                onRestore={(t) => restore(t as Track)}
+                onValidate={panel.onValidate}
+                onUnvalidate={panel.onUnvalidate}
+                onRemove={panel.onRemove}
+                onRestore={panel.onRestore}
               />
             )}
             {tab === "passages" && (
@@ -955,14 +978,14 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
                 segments={segments}
                 aiOutside={opts.ai_outside !== false}
                 margin={opts.point_margin ?? 2}
-                frame={frame}
+                now={nowSegs}
                 defaultMode={z.scope_only ? "ai" : "full"}
                 onSeek={seek}
-                onSaved={onChange}
-                onError={onError}
-                setOpt={(k, v) => setOpt(k, v as never)}
-                confirm={ask.confirm}
-                onPut={putSegments}
+                onSaved={panel.onSaved}
+                onError={panel.onError}
+                setOpt={panel.setOpt}
+                confirm={panel.confirm}
+                onPut={panel.onPut}
               />
             )}
             {tab === "manual" && (

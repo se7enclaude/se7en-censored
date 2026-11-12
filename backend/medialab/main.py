@@ -123,6 +123,9 @@ def _main(argv: list[str] | None = None) -> int:
     settings = SettingsStore().get()
     setup_logging(debug=args.debug or settings.advanced.debug_mode)
     log = get_logger("app")
+    from .system import kill_children_on_exit
+    if kill_children_on_exit():  # fermeture forcée : ffmpeg, whisper, llama-server s'arrêtent avec se7en
+        log.debug("Child processes bound to se7en's lifetime (job object)")
     if unblocked:
         log.info("Removed the internet download mark from %d program files", unblocked)
 
