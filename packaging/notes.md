@@ -1,8 +1,9 @@
-## se7en Censored 1.5.1
+## se7en Censored 1.5.2
 
-- **Composants à jour, clairement** : chaque composant (FFmpeg, le détecteur IA, Deno et yt-dlp) affiche « À jour (version X, vérifié le …) » ou « Mise à jour disponible ». Un composant à jour n'est plus jamais retéléchargé, et l'appli te prévient quand une nouvelle version sort.
-- **Corrigé** : une mise à jour de FFmpeg ou de Deno était téléchargée mais pas utilisée (le bouton retéléchargeait en boucle) ; un ancien yt-dlp pouvait masquer le plus récent.
-- **Corrigé** : le bandeau « Terminez l'installation » ne propose plus des moteurs dont se7en Censored ne se sert pas.
+- **IA plus solide** : si la carte graphique décroche pendant l'analyse, l'IA se relance toute seule (et passe sur le processeur s'il le faut) au lieu de s'arrêter sur une erreur.
+- **Corrigé** : un cache des détections abîmé est ignoré, l'analyse est simplement refaite.
+- **Vérification fluide** pendant la lecture, même avec beaucoup de zones et de passages.
+- **Ménage** : les anciens installateurs de mise à jour sont nettoyés, et les outils (FFmpeg…) s'arrêtent avec l'appli.
 
 Tes projets et tes réglages sont gardés.
 
