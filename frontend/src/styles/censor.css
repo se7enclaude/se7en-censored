@@ -24,8 +24,12 @@
 .cz-empty { font-size: 12px; margin: 10px 2px 0; line-height: 1.5; }
 
 .cz-viewer { padding: 0; overflow: hidden; }
-.cz-stage { position: relative; width: 100%; max-height: calc(100vh - var(--topbar-h, 72px) - 230px); min-height: 220px; margin: 0 auto; background: #000; border-radius: var(--radius-lg) var(--radius-lg) 0 0; overflow: hidden; touch-action: none; }
-.cz-stage:fullscreen { max-height: none; border-radius: 0; }
+/* la scène (fond noir, plein écran) et, dedans, le cadre aux proportions exactes de la vidéo : les zones et le
+   flou en direct se placent sur le cadre, donc toujours pile sur l'image (fenêtre basse, vidéo verticale, plein écran) */
+.cz-stage { display: grid; place-items: center; width: 100%; background: #000; border-radius: var(--radius-lg) var(--radius-lg) 0 0; overflow: hidden; }
+.cz-pic { position: relative; width: min(100%, calc((100vh - var(--topbar-h, 72px) - 230px) * var(--ratio, 1.7778))); min-width: min(100%, 260px); overflow: hidden; touch-action: none; }
+.cz-stage:fullscreen .cz-pic { width: min(100vw, calc(100vh * var(--ratio, 1.7778))); }
+.cz-stage:fullscreen { border-radius: 0; }
 .cz-stage video, .cz-stage .cz-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .cz-stage .cz-still { pointer-events: none; }
 .cz-stage .cz-still.fade { animation: cz-fade 160ms ease-out; }
@@ -131,7 +135,7 @@
 .cz-item.off { opacity: 0.5; }
 .cz-item.off .ellipsis { text-decoration: line-through; }
 .cz-item-main {
-  flex: 1; min-width: 0; display: grid; grid-template-columns: 10px 58px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  flex: 1; min-width: 0; display: grid; grid-template-columns: 10px 58px minmax(0, 1fr) auto auto; white-space: nowrap; align-items: center; gap: 8px;
   padding: 6px 6px; border: 0; background: none; color: inherit; font: 500 12.5px/1.3 var(--font-sans); text-align: left; cursor: pointer;
 }
 
@@ -156,3 +160,8 @@
 .cz-scope { margin-top: 14px; }
 .cz-scope .cz-tc-text { min-height: 110px; }
 .cz-scope-sum { margin-top: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+
+/* confiance de l'IA dans la liste des zones */
+.cz-conf { font: 700 10px/1.6 var(--font-mono); padding: 0 6px; border-radius: 99px; color: var(--text-tertiary); background: var(--surface-glass-light); flex: none; }
+.cz-conf.hi { color: var(--success); }
+.cz-conf.lo { color: var(--warning, #d9a441); }

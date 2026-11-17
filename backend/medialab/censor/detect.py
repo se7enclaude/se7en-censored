@@ -205,18 +205,31 @@ def load(cache: Path) -> tuple[dict, dict] | None:
     return det, m
 
 
+def _replace(tmp: Path, dst: Path) -> None:
+    """Remplacement atomique, réessayé : un antivirus ou une lecture en cours peut tenir le fichier un instant
+    (sans ça, une longue analyse s'arrêtait sur une erreur à une sauvegarde)."""
+    for k in range(8):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if k == 7:
+                raise
+            time.sleep(0.05 * (k + 1))
+
+
 def _write_meta(mf: Path, meta: dict) -> None:
     """Écriture atomique : un fichier temporaire, puis remplacement (jamais de JSON à moitié écrit)."""
     tmp = mf.with_name(mf.name + ".tmp")
     tmp.write_text(json.dumps(meta), "utf-8")
-    os.replace(tmp, mf)
+    _replace(tmp, mf)
 
 
 def save_arrays(cache: Path, det: dict, meta: dict) -> None:
     npz, mf = _store(cache)
     tmp = npz.with_name("detections.tmp.npz")
     np.savez_compressed(tmp, **det)
-    tmp.replace(npz)
+    _replace(tmp, npz)
     _write_meta(mf, meta)
 
 
@@ -233,7 +246,7 @@ def _save(cache: Path, rows: list, meta: dict) -> None:
         t = np.zeros(0, np.int8)
     tmp = npz.with_name("detections.tmp.npz")
     np.savez_compressed(tmp, f=f, c=c, s=s, b=b, t=t)
-    tmp.replace(npz)
+    _replace(tmp, npz)
     _write_meta(mf, meta)
 
 

@@ -88,7 +88,19 @@ def analyze(pid: str, settings, jctx, progress: Progress) -> dict:
             pass
     P.patch(pid, {"video": video, "step": "detect", "notes": notes, "thumb": str(thumb) if thumb.exists() else None})
     project = apply_scope(pid, video)
+    notes = list(project.get("notes") or [])  # celles des timecodes (lignes ignorées) sont gardées
     preview = start_preview(pid, src, video, cache, cancel)  # en parallèle de l'analyse
+    try:
+        return _analyze(pid, project, src, video, cache, notes, preview, has_url, settings, cancel, progress)
+    except BaseException:
+        if preview is not None:
+            preview.stop()
+        raise
+
+
+def _analyze(pid: str, project: dict, src: Path, video: dict, cache: Path, notes: list, preview, has_url: bool,
+             settings, cancel: threading.Event, progress: Progress) -> dict:
+    opts = project["options"]
     lo = 0.15 if has_url else 0.0
     device = "cpu" if getattr(settings.ai, "gpu_id", "auto") == "cpu" else "auto"
     mid = lo + (1 - lo) * 0.9  # l'analyse, puis la 2e passe (courte : seulement autour de la nudité trouvée)
@@ -169,8 +181,8 @@ def apply_scope(pid: str, video: dict) -> dict:
     de l'IA », et l'analyse se limite à eux (``scope_only``)."""
     project = P.load(pid)
     scope = project.get("scope")
-    if not scope or project.get("scope_only"):
-        return project
+    if not scope or project.get("scope_only") or scope.get("applied"):
+        return project  # déjà appliqués : « Analyser toute la vidéo » ne doit pas être défait
     from . import timecodes as TC
     fps = float(video.get("fps") or 25.0)
     frames = max(1, int(round(float(video.get("duration") or 0) * fps)))
@@ -187,6 +199,7 @@ def apply_scope(pid: str, video: dict) -> dict:
         notes.append("Aucun timecode lisible : toute la vidéo est analysée.")
         return P.patch(pid, {"scope": None, "notes": notes})
     return P.patch(pid, {"segments": T.clean_segments(segs), "scope_only": True, "notes": notes,
+                         "scope": {**scope, "applied": True},
                          "options": {**project["options"], "ai_outside": False}})
 
 

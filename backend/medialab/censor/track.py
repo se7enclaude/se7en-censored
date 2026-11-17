@@ -41,10 +41,22 @@ def threshold(sensitivity: int) -> float:
 
 
 def verify_threshold(sensitivity: int) -> float:
-    """Note minimale de la 2e vérification (verify.py) : 0,2 par défaut (65), 0,3 très strict (0), 0,1 (100)."""
+    """Note minimale de la 2e vérification (verify.py) : 0,28 par défaut (65), 0,38 très strict (0), 0,1 (100)."""
     s = max(0, min(100, int(sensitivity)))
-    v = 0.2 + 0.1 * (65 - s) / 65 if s <= 65 else 0.2 - 0.1 * (s - 65) / 35
+    v = 0.28 + 0.1 * (65 - s) / 65 if s <= 65 else 0.28 - 0.18 * (s - 65) / 35
     return round(v, 4)
+
+
+VERIFY_SURE = 0.5    # à partir de cette note, la 2e vérification commence à renforcer une détection…
+VERIFY_FULL = 0.65   # … et à partir de celle-ci, la confiance du détecteur est doublée
+VERIFY_BOOST = 1.0
+
+
+def fused(s: np.ndarray, ver: np.ndarray) -> np.ndarray:
+    """Confiance du détecteur renforcée par la 2e vérification : une zone que le détecteur voit faiblement mais
+    que CLIP juge nettement nue (photo fixe, petite zone, éclairage difficile) compte comme une zone sûre."""
+    k = np.clip((np.nan_to_num(ver, nan=0.0) - VERIFY_SURE) / (VERIFY_FULL - VERIFY_SURE), 0.0, 1.0)
+    return np.minimum(1.0, s * (1.0 + VERIFY_BOOST * k)).astype(np.float32)
 
 
 @dataclass
@@ -55,11 +67,16 @@ class Params:
     pad_s: float = 0.25            # flou gardé 0,25 s avant et après chaque apparition
     gap_s: float = 0.6             # image ratée au milieu d'une piste : trou comblé jusqu'à 0,6 s
     keep_ratio: float = 0.45       # une zone déjà suivie continue jusqu'à 45 % du seuil (hystérésis)
+    open_ratio: float = 0.7        # à côté d'une nudité confirmée, une zone peut s'ouvrir à 70 % du seuil
+    weak_note: float = 0.45        # … si la 2e vérification la juge nue (note moyenne)
+    sure_ratio: float = 1.25       # une zone seule à l'écran doit être sûre en moyenne à 125 % du seuil
+    bridge_s: float = 1.5          # deux apparitions de la même zone à moins de 1,5 s (même plan) : une seule zone
     smooth: int = 5                # lissage de la position sur 5 images
     match_iou: float = 0.15        # recouvrement minimal pour continuer une piste
     confirm_s: float = 0.25        # une zone n'est floutée que si le détecteur l'a vue franchement 0,25 s au moins
-    male_ratio: float = 0.8        # « poitrine » doublée d'un torse masculin presque aussi sûr : c'est un torse
-    male_share: float = 0.5        # … sur plus de la moitié de ses images : la zone est écartée
+    male_ratio: float = 0.3        # « poitrine » vue aussi comme torse masculin (même faiblement) : c'est un torse
+    covered_ratio: float = 0.8     # « poitrine » vue aussi comme poitrine couverte presque aussi sûre : soutien-gorge
+    male_share: float = 0.35       # … sur plus du tiers de ses images : la zone est écartée
     scene_s: float = 1.0           # zone moins sûre gardée si une nudité confirmée est à l'écran à 1 s près
     verify: bool = True            # 2e vérification (si la vidéo l'a eue) : zone jugée non nue par CLIP écartée
 
@@ -137,16 +154,71 @@ def _expand(boxes: np.ndarray, margin: float) -> np.ndarray:
     return np.clip(out, 0.0, 1.0)
 
 
-def _male_lookalike(f: np.ndarray, c: np.ndarray, s: np.ndarray, b: np.ndarray, tr: np.ndarray,
-                    ratio: float) -> np.ndarray:
-    """Poitrines vues au même endroit, à la même image, comme torse masculin presque aussi sûr (pecs)."""
+def _lookalike(f: np.ndarray, c: np.ndarray, s: np.ndarray, b: np.ndarray, tr: np.ndarray,
+               male_ratio: float, covered_ratio: float) -> np.ndarray:
+    """Poitrines vues au même endroit, à la même image, comme torse masculin (pecs) ou comme poitrine couverte
+    (soutien-gorge, maillot) : le détecteur hésite, et c'est presque toujours l'autre lecture la bonne."""
     out = np.zeros(len(f), bool)
-    fb, mb = LABELS.index("FEMALE_BREAST_EXPOSED"), LABELS.index("MALE_BREAST_EXPOSED")
-    males: dict[int, list[int]] = {}
-    for k in np.flatnonzero((c == mb) & (tr == 0)):
-        males.setdefault(int(f[k]), []).append(int(k))
+    fb = LABELS.index("FEMALE_BREAST_EXPOSED")
+    rivals = {LABELS.index("MALE_BREAST_EXPOSED"): male_ratio, LABELS.index("FEMALE_BREAST_COVERED"): covered_ratio}
+    seen: dict[int, list[int]] = {}
+    for k in np.flatnonzero(np.isin(c, list(rivals)) & (tr == 0)):
+        seen.setdefault(int(f[k]), []).append(int(k))
     for k in np.flatnonzero((c == fb) & (tr == 0)):
-        out[k] = any(s[m] >= ratio * s[k] and iou(b[k], b[m]) > 0.2 for m in males.get(int(f[k]), ()))
+        out[k] = any(s[m] >= rivals[int(c[m])] * s[k] and iou(b[k], b[m]) > 0.2 for m in seen.get(int(f[k]), ()))
+    return out
+
+
+def _reach_back(raw: list[dict], f, c, s, b, tr, male, ver, shot, taken: np.ndarray, gap: int, match: float) -> None:
+    """Une zone s'ouvre quand le détecteur en est sûr, mais elle était souvent déjà là juste avant, vue plus
+    faiblement : on remonte le temps depuis sa première image et on lui rend ces détections laissées de côté."""
+    if not raw:
+        return
+    free: dict[int, list[int]] = {}  # classe → détections libres, dans l'ordre des images
+    for k in np.flatnonzero(~taken):
+        free.setdefault(int(c[k]), []).append(int(k))
+    for t in raw:
+        cand = free.get(t["cls"])
+        if not cand:
+            continue
+        fr = f[cand]
+        while True:
+            first, box = t["obs"][0][0], t["obs"][0][1]
+            lo, hi = np.searchsorted(fr, first - gap, "left"), np.searchsorted(fr, first, "left")
+            best, best_v = None, match
+            for j in range(hi - 1, lo - 1, -1):  # la plus proche dans le temps d'abord
+                k = cand[j]
+                if taken[k] or shot[k] != t["shot"]:
+                    continue
+                if best is not None and f[k] != f[best]:
+                    break
+                v = _near(box, b[k])
+                if v >= best_v:
+                    best, best_v = k, v
+            if best is None:
+                break
+            taken[best] = True
+            t["obs"].insert(0, (int(f[best]), b[best], float(s[best]), bool(tr[best]), bool(male[best]), float(ver[best])))
+
+
+def _bridge(raw: list[dict], gap: int, match: float) -> list[dict]:
+    """La même zone perdue un instant (main qui passe, tête qui tourne) puis retrouvée dans le même plan : une
+    seule piste, le trou est comblé — sinon le flou s'éteint puis se rallume."""
+    out: list[dict] = []
+    last: dict[tuple[int, int], list[dict]] = {}
+    for t in sorted(raw, key=lambda t: t["obs"][0][0]):
+        best, best_v = None, match
+        for o in last.get((t["cls"], t["shot"]), []):
+            d = t["obs"][0][0] - o["obs"][-1][0]
+            if 0 < d <= gap:
+                v = _near(o["obs"][-1][1], t["obs"][0][1])
+                if v >= best_v:
+                    best, best_v = o, v
+        if best is None:
+            out.append(t)
+            last.setdefault((t["cls"], t["shot"]), []).append(t)
+        else:
+            best["obs"].extend(t["obs"])
     return out
 
 
@@ -156,6 +228,7 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
     fps = fps or 25.0
     thr = threshold(p.sensitivity)
     low = max(RAW_MIN_SCORE, thr * p.keep_ratio)  # pour continuer une zone ; il faut ``thr`` pour en ouvrir une
+    start = max(low, thr * p.open_ratio) if p.verify else thr  # zone faible : gardée seulement en scène de nudité
     gap = max(1, int(round(p.gap_s * fps)))
     pad = int(round(p.pad_s * fps))
     wanted = {CLASS_IDS[c] for c in p.classes if c in CLASS_IDS}
@@ -169,13 +242,15 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
     vmin = verify_threshold(p.sensitivity) if p.verify else -1.0
     # tr = 1 : position suivie à l'image (detect.Watch), pas vue par le détecteur : ne sert qu'à prolonger une zone
     b = b.astype(np.float32).reshape(-1, 4)
-    male = _male_lookalike(f, c, s.astype(np.float32), b, tr, p.male_ratio)
+    male = _lookalike(f, c, s.astype(np.float32), b, tr, p.male_ratio, p.covered_ratio)
+    s = fused(s.astype(np.float32), ver) if p.verify else s.astype(np.float32)
     keep = np.isin(c, list(wanted)) & ((s >= low) | (tr == 1))
-    f, c, s, b, tr, male, ver = f[keep], c[keep], s[keep].astype(np.float32), b[keep], tr[keep], male[keep], ver[keep]
+    f, c, s, b, tr, male, ver = f[keep], c[keep], s[keep], b[keep], tr[keep], male[keep], ver[keep]
     order = np.lexsort((-s, tr, f))  # par image, les vraies détections d'abord, les plus confiantes en premier
     f, c, s, b, tr, male, ver = f[order], c[order], s[order], b[order], tr[order], male[order], ver[order]
     shot = np.searchsorted(cuts, f, side="right")  # n° du plan de chaque détection
 
+    taken = np.zeros(len(f), bool)  # détections déjà rangées dans une piste
     raw: list[dict] = []  # pistes en construction : {cls, plan, obs: [(f, box, score, suivie, torse, note)]}
     open_by_cls: dict[int, list[dict]] = {}
     i = 0
@@ -200,17 +275,21 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
                     if v >= best_v:
                         best, best_v = ti, v
                 if best is None:
-                    if tr[k] or s[k] < thr:
+                    if tr[k] or s[k] < start:
                         continue  # trop incertain (ou seulement suivi) pour ouvrir une nouvelle zone
                     t = {"cls": int(cls), "shot": int(shot[i]),
                          "obs": [(frame, b[k], float(s[k]), False, bool(male[k]), float(ver[k]))]}
                     raw.append(t)
                     live.append(t)
                     used.add(len(live) - 1)
+                    taken[k] = True
                 else:
                     live[best]["obs"].append((frame, b[k], float(s[k]), bool(tr[k]), bool(male[k]), float(ver[k])))
                     used.add(best)
+                    taken[k] = True
         i = j
+    _reach_back(raw, f, c, s, b, tr, male, ver, shot, taken, gap, p.match_iou)
+    raw = _bridge(raw, max(gap, int(round(p.bridge_s * fps))), p.match_iou)
 
     # Une zone n'est floutée que si elle est confirmée : vue franchement (au-dessus du seuil) assez longtemps, et
     # sûre en moyenne. Une zone vue plus brièvement n'est gardée que si une nudité confirmée est à l'écran au même
@@ -223,13 +302,16 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
     for t in raw:
         real = [o for o in t["obs"] if not o[3]]
         scores = np.array([o[2] for o in real])
-        if sum(o[4] for o in real) > p.male_share * len(real):
-            continue  # torse d'homme (pecs) pris pour une poitrine
+        if sum(o[4] for o in real) >= p.male_share * len(real):
+            continue  # torse d'homme ou soutien-gorge pris pour une poitrine nue
         notes = [o[5] for o in real if not np.isnan(o[5])]
         if notes and float(np.mean(notes)) < vmin:
             continue  # la 2e vérification la juge non nue
-        if int((scores >= thr).sum()) >= need and float(scores.mean()) >= thr:
+        if int((scores >= thr).sum()) >= need and float(scores.mean()) >= min(0.9, thr * p.sure_ratio):
             sure.append(t)
+        elif float(scores.max()) < thr:  # ouverte sous le seuil : il faut que la 2e vérification la confirme
+            if len(real) >= 2 and notes and float(np.mean(notes)) >= p.weak_note:
+                maybe.append(t)
         elif len(real) >= 2 or float(scores.max()) >= thr + 0.15:
             maybe.append(t)
     spans = [(t["obs"][0][0] - near, t["obs"][-1][0] + near) for t in sure]
@@ -239,7 +321,7 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
     for t in sorted(sure + maybe, key=lambda t: t["obs"][0][0]):
         obs = t["obs"]
         real = [o for o in obs if not o[3]]
-        top = max(o[2] for o in real)
+        top = float(np.mean([o[2] for o in real]))  # confiance moyenne (détecteur + 2e vérification), montrée dans la liste
         fs = np.array([o[0] for o in obs])
         bs = np.stack([o[1] for o in obs])
         a, z = int(fs[0]), int(fs[-1])
@@ -257,8 +339,17 @@ def build(det: dict, fps: float, frames: int, p: Params, step: int = 1) -> list[
 
 
 # ------------------------------------------------------------------ choix de l'utilisateur
+def mark(track: Track) -> dict:
+    """Ce qu'on retient d'une piste retirée ou validée : sa classe, son moment et son endroit moyen dans l'image."""
+    return {"cls": track.cls, "f0": track.f0, "f1": track.f1,
+            "box": [round(float(v), 4) for v in track.boxes.mean(0)]}
+
+
 def hidden_match(track: Track, hidden: list[dict]) -> bool:
-    """Une piste masquée reste masquée si on change la sensibilité : même classe, même moment (≥ 50 %)."""
+    """Une piste masquée reste masquée si on change la sensibilité : même classe, même moment (≥ 50 %) et même
+    endroit de l'image — deux zones de la même classe à l'écran en même temps restent distinctes. Les choix
+    enregistrés avant (sans ``box``) valent pour le moment entier, comme avant."""
+    where = None
     for h in hidden:
         if h.get("cls") != track.cls:
             continue
@@ -266,8 +357,14 @@ def hidden_match(track: Track, hidden: list[dict]) -> bool:
         if hi < lo:
             continue
         overlap = hi - lo + 1
-        if overlap >= 0.5 * min(track.f1 - track.f0 + 1, int(h["f1"]) - int(h["f0"]) + 1):
-            return True
+        if overlap < 0.5 * min(track.f1 - track.f0 + 1, int(h["f1"]) - int(h["f0"]) + 1):
+            continue
+        box = h.get("box")
+        if box and len(box) == 4:
+            where = track.boxes.mean(0) if where is None else where
+            if iou(where, np.asarray(box, np.float32)) < 0.2:
+                continue
+        return True
     return False
 
 

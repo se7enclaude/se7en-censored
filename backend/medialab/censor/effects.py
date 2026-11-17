@@ -14,7 +14,7 @@ MID = 8.0  # flou 10 bits : pixels par case pour le lissage
 BLUR_CELLS = (20.0, 4.0)  # flou : détails gardés sur le grand côté de la zone, intensité 0 (léger) à 100 (fort)
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=24)  # masques à la taille de la zone : en 4K, 256 pouvaient tenir plusieurs Go
 def _mask(w: int, h: int, shape: str) -> np.ndarray:
     """Masque 0..1 (h×w) : ellipse aux bords adoucis, ou rectangle plein."""
     if shape != "ellipse":

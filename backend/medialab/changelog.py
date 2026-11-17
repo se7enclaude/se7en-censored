@@ -2,6 +2,22 @@
 from __future__ import annotations
 
 CHANGES: dict[str, dict[str, list[str]]] = {
+    "1.6.0": {
+        "fr": ["Reconnaissance plus juste : bien moins de fausses alertes (torses d'hommes, soutiens-gorge, zones isolées peu sûres), sans rien réanalyser : rouvre simplement ton projet.",
+               "Reconnaissance plus complète : une zone que le détecteur voit faiblement mais que la 2e vérification confirme est floutée, chaque zone commence dès sa toute première image, et une zone perdue un instant dans le même plan ne fait plus clignoter le flou.",
+               "Liste des zones : la confiance de l'IA est affichée, et « Tout valider » valide d'un coup ce qui reste.",
+               "Corrigé : retirer ou valider une zone ne touche plus l'autre zone de la même classe à l'écran au même moment ; « Flouter à nouveau » restaure toujours la bonne zone.",
+               "Corrigé : zones et flou toujours pile sur l'image (fenêtre basse, vidéo verticale, plein écran) ; le lecteur ne revient plus à l'image 0 quand l'aperçu vidéo est prêt ; l'ancienne image ne reste plus affichée en avançant image par image.",
+               "Corrigé : « Analyser toute la vidéo » analysait seulement les passages ; une zone tracée pendant un suivi n'est plus perdue ; X retire la zone à l'image, pas une zone à la main choisie ailleurs ; plus de passages ajoutés en double.",
+               "Plus sûr : la copie d'aperçu s'arrête avec l'analyse ou le projet supprimé, moins de mémoire utilisée à l'export en 4K."],
+        "en": ["More accurate recognition: far fewer false alarms (men's chests, bras, isolated low-confidence zones), with nothing to analyse again: just reopen your project.",
+               "More complete recognition: a zone the detector sees faintly but the second check confirms is blurred, each zone starts at its very first frame, and a zone lost for a moment within a shot no longer makes the blur flicker.",
+               "Zone list: the AI confidence is shown, and \"Validate all\" validates everything left at once.",
+               "Fixed: removing or validating a zone no longer affects the other zone of the same class on screen at the same time; \"Blur again\" always restores the right zone.",
+               "Fixed: zones and blur always exactly on the picture (short window, vertical video, full screen); the player no longer jumps back to frame 0 when the preview is ready; the previous frame no longer stays on screen when stepping.",
+               "Fixed: \"Analyse the whole video\" only analysed the passages; a zone drawn during tracking is no longer lost; X removes the zone on screen, not a manual zone selected elsewhere; no more duplicated passages.",
+               "Safer: the preview copy stops with the analysis or the deleted project, less memory used when exporting in 4K."],
+    },
     "1.5.2": {
         "fr": ["Corrigé : si la carte graphique décroche pendant l'analyse, l'IA se relance toute seule (et passe sur le processeur s'il le faut) au lieu de s'arrêter sur une erreur.", "Corrigé : un cache des détections abîmé est ignoré, l'analyse est simplement refaite.", "La vérification reste fluide pendant la lecture, même avec beaucoup de zones et de passages.", "Les anciens installateurs de mise à jour sont nettoyés, et les outils (FFmpeg…) s'arrêtent avec l'appli."],
         "en": ["Fixed: if the graphics card drops out during the analysis, the AI restarts on its own (and falls back to the processor if needed) instead of stopping with an error.", "Fixed: a damaged detection cache is ignored, the analysis is simply done again.", "Review stays smooth during playback, even with many zones and passages.", "Old update installers are cleaned up, and the tools (FFmpeg…) stop with the app."],

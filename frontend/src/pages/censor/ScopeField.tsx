@@ -29,13 +29,14 @@ export function ScopeField({ text, setText, margin, setMargin, onCount, onError 
       onCount(0);
       return;
     }
+    let alive = true; // une réponse arrivée après un nouveau texte (ou un champ vidé) est ignorée
     const h = setTimeout(() => {
       api
         .post<Preview>("/api/censor/timecodes", { text, margin })
-        .then((r) => { setPreview(r); onCount(r.ranges.length); })
-        .catch(onError);
+        .then((r) => { if (alive) { setPreview(r); onCount(r.ranges.length); } })
+        .catch((e) => alive && onError(e));
     }, 300);
-    return () => clearTimeout(h);
+    return () => { alive = false; clearTimeout(h); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, margin]);
 

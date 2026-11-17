@@ -355,15 +355,20 @@ function ProjectView({ id, live, onBack }: { id: string; live?: Live; onBack: ()
   const toast = useApp((s) => s.toast);
   const [p, setP] = useState<Project | null>(null);
   const [zones, setZones] = useState<Zones | null>(null);
+  const loadSeq = useRef(0); // deux chargements qui se croisent : seul le plus récent compte
   const load = useCallback(
-    () =>
-      api
+    () => {
+      const seq = ++loadSeq.current;
+      return api
         .get<Project>(`/api/censor/projects/${id}`)
         .then((proj) => {
+          if (seq !== loadSeq.current) return;
           setP(proj);
-          if (["review", "done", "exporting"].includes(proj.status)) api.get<Zones>(`/api/censor/projects/${id}/zones`).then(setZones).catch(() => undefined);
+          if (["review", "done", "exporting"].includes(proj.status))
+            api.get<Zones>(`/api/censor/projects/${id}/zones`).then((zz) => { if (seq === loadSeq.current) setZones(zz); }).catch(() => undefined);
         })
-        .catch((e) => toast({ kind: "error", title: e.message })),
+        .catch((e) => toast({ kind: "error", title: e.message }));
+    },
     [id, toast],
   );
 
@@ -582,10 +587,9 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   );
   useEffect(() => {
     setStillReady(false);
-    if (playing || (src && !preview)) {
-      setStillUrl(null);
-      return;
-    }
+    // avec une vidéo dessous, l'ancienne image exacte ne doit pas rester affichée sur la nouvelle image
+    if (src || playing) setStillUrl(null);
+    if (playing || (src && !preview)) return;
     const t = setTimeout(() => setStillUrl(mediaUrl(`/api/censor/projects/${p.id}/frame?f=${frame}&blur=${preview ? 1 : 0}&k=${encodeURIComponent(optsKey)}`)), src ? 400 : 90);
     return () => clearTimeout(t);
   }, [frame, playing, preview, src, p.id, optsKey]);
@@ -623,7 +627,12 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     const patch = pendingOpts.current;
     if (!Object.keys(patch).length) return;
     pendingOpts.current = {};
-    await api.patch(`/api/censor/projects/${p.id}/options`, patch);
+    try {
+      await api.patch(`/api/censor/projects/${p.id}/options`, patch);
+    } catch (e) {
+      pendingOpts.current = { ...patch, ...pendingOpts.current }; // pas enregistrés : à renvoyer (avant l'export)
+      throw e;
+    }
   }, [p.id]);
   const setOpt = <K extends keyof Options>(k: K, v: Options[K]) => {
     setOpts((o) => ({ ...o, [k]: v }));
@@ -662,11 +671,20 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   }, [marks, frame, seek]);
 
   const sel = p.manual.find((m) => m.id === selected) ?? null;
+  const manualNow = useRef(p.manual); // la liste la plus récente (un suivi de zone dure plusieurs secondes)
+  manualNow.current = p.manual;
   const saveManual = (manual: Manual[]) => api.put(`/api/censor/projects/${p.id}/manual`, { manual }).then(onChange).catch(onError);
   const putSegments = (next: Segment[]) => api.put(`/api/censor/projects/${p.id}/segments`, { segments: next }).then(onChange);
 
   // trier les propositions de l'IA
   const validate = (t: Track) => api.post(`/api/censor/projects/${p.id}/validate`, { track: t.id }).then(onChange).catch(onError);
+  const validateAll = (n: number) =>
+    ask.confirm({
+      title: `Valider les ${n} zones restantes ?`,
+      body: "Elles restent floutées et quittent la liste « À vérifier ». Tu peux en remettre une à vérifier depuis « Validées ».",
+      ok: "Tout valider",
+      run: () => api.post(`/api/censor/projects/${p.id}/validate`, { track: "*" }).then(onChange).catch(onError),
+    });
   const unvalidate = (t: Track) => api.post(`/api/censor/projects/${p.id}/unvalidate`, { track: t.id }).then(onChange).catch(onError);
   const retire = (t: Track) =>
     ask.confirm({
@@ -675,18 +693,16 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       ok: "Retirer la zone",
       run: () => api.post(`/api/censor/projects/${p.id}/hide`, { track: t.id }).then(onChange).catch(onError),
     });
-  const restore = (t: Track) => {
-    const i = z.hidden.findIndex((h) => h.cls === t.cls && h.f0 <= t.f1 && h.f1 >= t.f0);
-    api.post(`/api/censor/projects/${p.id}/unhide`, { index: i }).then(onChange).catch(onError);
-  };
+  const restore = (t: Track) => api.post(`/api/censor/projects/${p.id}/unhide`, { track: t.id }).then(onChange).catch(onError);
   const atFrame = (list: Track[]) => list.find((t) => t.f0 <= frame && frame <= t.f1);
 
   // listes (React.memo) : des fonctions stables et seulement ce qui change vraiment, pas l'image en cours
-  const latest = useRef({ validate, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm });
-  latest.current = { validate, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm };
+  const latest = useRef({ validate, validateAll, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm });
+  latest.current = { validate, validateAll, unvalidate, retire, restore, setOpt, putSegments, onChange, onError, confirm: ask.confirm };
   const panel = useMemo(() => ({
     onValidate: (t: ZoneItem) => latest.current.validate(t as Track),
     onUnvalidate: (t: ZoneItem) => latest.current.unvalidate(t as Track),
+    onValidateAll: (n: number) => latest.current.validateAll(n),
     onRemove: (t: ZoneItem) => latest.current.retire(t as Track),
     onRestore: (t: ZoneItem) => latest.current.restore(t as Track),
     onSaved: () => latest.current.onChange(),
@@ -727,7 +743,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
     setTab("manual");
     if (mode === "new") {
       const id = Math.random().toString(36).slice(2, 10);
-      followFrom(frame, box, (keys) => [...p.manual, { id, keys }]);
+      followFrom(frame, box, (keys, now) => [...now, { id, keys }]);
       setSelected(id);
     } else if (mode === "fixed") {
       const id = Math.random().toString(36).slice(2, 10);
@@ -743,16 +759,16 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       saveManual(p.manual.map((m) => (m.id === sel.id ? { ...m, keys: [...keep, { f: frame, box }, ...(end > frame ? [{ f: end, box }] : [])] } : m)));
     } else if (mode === "key" && selected) {
       const keep = p.manual.find((m) => m.id === selected)?.keys.filter((k) => k.f < frame) ?? [];
-      followFrom(frame, box, (keys) => p.manual.map((m) => (m.id === selected ? { ...m, keys: [...keep, ...keys] } : m)));
+      followFrom(frame, box, (keys, now) => now.map((m) => (m.id === selected ? { ...m, keys: [...keep, ...keys] } : m)));
     }
   };
 
   /** La zone tracée suit toute seule le mouvement (jusqu'à 10 s, ou jusqu'à ce qu'elle sorte du cadre). */
-  const followFrom = async (f: number, box: Box, place: (keys: { f: number; box: Box }[]) => Manual[]) => {
+  const followFrom = async (f: number, box: Box, place: (keys: { f: number; box: Box }[], now: Manual[]) => Manual[]) => {
     setFollowing(true);
     try {
       const r = await api.post<{ keys: { f: number; box: Box }[]; reason: string }>(`/api/censor/projects/${p.id}/follow`, { f, box, seconds: 10 });
-      await saveManual(place(r.keys));
+      await saveManual(place(r.keys, manualNow.current));
       const secs = (r.keys[r.keys.length - 1].f - f) / fps;
       toast({
         kind: "info",
@@ -768,6 +784,10 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   };
 
   const finishHere = (m: Manual) => {
+    if (frame < m.keys[0].f) {
+      toast({ kind: "info", title: "Cette zone commence plus tard", body: "Place-toi après son début pour la finir ici.", timeout: 3000 });
+      return;
+    }
     const b = manualAt(m, Math.min(frame, m.keys[m.keys.length - 1].f)) ?? m.keys[m.keys.length - 1].box;
     saveManual(p.manual.map((x) => (x.id === m.id ? { ...x, keys: [...x.keys.filter((k) => k.f < frame), { f: Math.max(frame, x.keys[0].f), box: b }] } : x)));
   };
@@ -823,14 +843,14 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
       if (t) validate(t);
     } else if (k === "x" || k === "delete" || k === "backspace") {
       done();
-      if (sel) removeManual(sel);
-      else {
-        const t = atFrame(visible);
-        if (t) retire(t);
-      }
+      // d'abord ce qui est à l'image : la zone à la main choisie, sinon la zone de l'IA
+      const t = atFrame(visible);
+      if (sel && (manualAt(sel, frame) || !t)) removeManual(sel);
+      else if (t) retire(t);
     }
     else if (k === "i") { done(); setMarkIn(frame); toast({ kind: "info", title: `Début du passage : ${tc(frame / fps)}`, body: "Va à la fin et appuie sur O.", timeout: 2500 }); }
     else if (k === "o") { done(); markOut(); }
+    else if (following && "azre".includes(k)) done(); // un suivi est en cours : on attend qu'il soit enregistré
     else if (k === "a") { done(); pl?.pause(); setDrawing(drawing === "new" ? null : "new"); }
     else if (k === "z") { done(); pl?.pause(); setDrawing(drawing === "fixed" ? null : "fixed"); }
     else if (k === "r" && sel) { done(); pl?.pause(); setDrawing(drawing === "key" ? null : "key"); }
@@ -851,6 +871,10 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
   useEffect(() => {
     if (page !== "censor") player.current?.pause();
   }, [page]);
+  // une fenêtre (confirmation, aide) s'ouvre hors de l'image : on quitte le plein écran pour qu'elle se voie
+  useEffect(() => {
+    if ((ask.open || help) && document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+  }, [ask.open, help]);
 
   const showLive = preview && blurred.length > 0 && !(stillReady && !playing);
   const todoCount = visible.filter((t) => !t.validated).length;
@@ -965,6 +989,7 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
                 colors={CLASS_COLOR}
                 onSeek={seek}
                 onValidate={panel.onValidate}
+                onValidateAll={panel.onValidateAll}
                 onUnvalidate={panel.onUnvalidate}
                 onRemove={panel.onRemove}
                 onRestore={panel.onRestore}
@@ -992,11 +1017,11 @@ function Review({ project: p, zones: z, live, exporting, onChange, onError }: { 
               <div className="cz-manual">
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <Button size="sm" variant={drawing === "new" ? "primary" : "outline"} icon={<Plus size={14} />} loading={following} tip="Trace un cadre : la zone suit le mouvement toute seule (A)" onClick={() => setDrawing(drawing === "new" ? null : "new")}>Zone qui suit</Button>
-                  <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} tip={`Trace un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
+                  <Button size="sm" variant={drawing === "fixed" ? "primary" : "outline"} icon={<Pin size={13} />} disabled={following} tip={`Trace un cadre : il reste tel quel, sans bouger, ${FIXED_S} s (Z)`} onClick={() => setDrawing(drawing === "fixed" ? null : "fixed")}>Zone fixe</Button>
                 </div>
                 {sel && (
                   <div className="row cz-sel-actions">
-                    <Button size="sm" variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessine la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessine la zone à cette image : le suivi repart d'ici (R)"}>Recadrer ici</Button>
+                    <Button size="sm" disabled={following} variant={drawing === "key" ? "primary" : "outline"} onClick={() => setDrawing(drawing === "key" ? null : "key")} tip={sel.fixed ? "Redessine la zone à cette image : ce cadre vaut jusqu'à sa fin (R)" : "Redessine la zone à cette image : le suivi repart d'ici (R)"}>Recadrer ici</Button>
                     <Button size="sm" variant="outline" tip="La zone s'arrête à cette image, plus tôt ou plus tard (E)" onClick={() => finishHere(sel)}>Finir ici</Button>
                     <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} tip="Supprimer cette zone (X)" onClick={() => removeManual(sel)}>Supprimer</Button>
                   </div>

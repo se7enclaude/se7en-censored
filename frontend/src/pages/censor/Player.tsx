@@ -50,7 +50,8 @@ export const Player = forwardRef<PlayerApi, {
 }>(function Player({ src, fps, total, frame, onFrame, ratio, stillUrl, onStillLoad, overlay, marks, preview, setPreview, stageProps, stageRef, onPlayingChange, waitingText, onVideoClick, onJump }, ref) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ownStage = useRef<HTMLDivElement | null>(null);
-  const stage = stageRef ?? ownStage;
+  const stage = stageRef ?? ownStage; // le cadre de l'image (mêmes proportions que la vidéo) : repère des zones
+  const outer = useRef<HTMLDivElement | null>(null); // ce qui passe en plein écran
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -70,13 +71,22 @@ export const Player = forwardRef<PlayerApi, {
     const rvfc = (v as any).requestVideoFrameCallback?.bind(v);
     const cancelRvfc = (v as any).cancelVideoFrameCallback?.bind(v);
     const fromTime = (t: number) => Math.max(0, Math.min(last, Math.round(t * fps - 0.001)));
+    // la vidéo arrive parfois après coup (copie d'aperçu prête) : elle reprend à l'image où on en était, et ses
+    // premières images (temps 0) ne ramènent pas la vérification au début
+    let armed = frameRef.current === 0;
+    const init = () => {
+      if (!armed && frameRef.current > 0) v.currentTime = (frameRef.current + 0.5) / fps;
+      armed = true;
+    };
+    if (v.readyState >= 1) init();
+    else v.addEventListener("loadedmetadata", init, { once: true });
     const onPainted = (_: number, meta: { mediaTime: number }) => {
-      onFrame(fromTime(meta.mediaTime));
+      if (armed && !v.seeking) onFrame(fromTime(meta.mediaTime));
       handle = rvfc(onPainted);
     };
     let raf = 0;
     const tick = () => {
-      onFrame(fromTime(v.currentTime - 0.5 / fps));
+      if (armed && !v.seeking) onFrame(fromTime(v.currentTime - 0.5 / fps));
       if (!v.paused) raf = requestAnimationFrame(tick);
     };
     if (rvfc) handle = rvfc(onPainted);
@@ -92,15 +102,23 @@ export const Player = forwardRef<PlayerApi, {
     return () => {
       if (rvfc && cancelRvfc) cancelRvfc(handle);
       cancelAnimationFrame(raf);
+      v.removeEventListener("loadedmetadata", init);
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("waiting", onWaiting);
       v.removeEventListener("playing", onPlaying);
       v.removeEventListener("canplay", onPlaying);
     };
-  }, [fps, last, playable, onFrame, onPlayingChange]);
+  }, [fps, last, playable, src, onFrame, onPlayingChange]);
 
   useEffect(() => setFailed(false), [src]);
+  // la vidéo ne se lit plus (fichier disparu, erreur de décodage) : on repasse en image par image, à l'arrêt
+  const onVideoError = useCallback(() => {
+    setFailed(true);
+    setPlaying(false);
+    setBuffering(false);
+    onPlayingChange?.(false);
+  }, [onPlayingChange]);
   useEffect(() => {
     const v = videoRef.current;
     if (v) { v.playbackRate = rate; v.muted = muted; v.volume = volume; }
@@ -127,13 +145,13 @@ export const Player = forwardRef<PlayerApi, {
     speed: (dir) => setRate((r) => SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, SPEEDS.indexOf(r) + dir))] ?? 1),
     mute: () => setMuted((m) => !m),
     fullscreen: () => {
-      const el = stage.current;
+      const el = outer.current;
       if (!el) return;
       if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
       else el.requestFullscreen().catch(() => undefined);
     },
     playing: () => !!videoRef.current && !videoRef.current.paused,
-  }), [fps, playable, seek, stage]);
+  }), [fps, playable, seek]);
   useImperativeHandle(ref, () => api, [api]);
 
   const [editing, setEditing] = useState(false);
@@ -146,14 +164,15 @@ export const Player = forwardRef<PlayerApi, {
 
   return (
     <div className="card cz-viewer">
-      <div className="cz-stage" ref={stage} style={{ aspectRatio: String(ratio) }} {...stageProps}>
+      <div className="cz-stage" ref={outer}>
+       <div className="cz-pic" ref={stage} style={{ aspectRatio: String(ratio), ["--ratio" as any]: String(ratio) }} {...stageProps}>
         {playable && (
           <video
             ref={videoRef}
             src={src!}
             preload="auto"
             playsInline
-            onError={() => setFailed(true)}
+            onError={onVideoError}
             onClick={onVideoClick}
             onDoubleClick={api.fullscreen}
           />
@@ -162,6 +181,7 @@ export const Player = forwardRef<PlayerApi, {
         {overlay}
         {buffering && playing && <div className="cz-buffer"><Loader2 size={28} className="spin" /></div>}
         {waitingText && <div className="cz-wait">{waitingText}</div>}
+       </div>
       </div>
 
       <Timeline marks={marks} total={total} frame={frame} fps={fps} onSeek={seek} />

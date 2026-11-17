@@ -1,9 +1,11 @@
-## se7en Censored 1.5.2
+## se7en Censored 1.6.0
 
-- **IA plus solide** : si la carte graphique décroche pendant l'analyse, l'IA se relance toute seule (et passe sur le processeur s'il le faut) au lieu de s'arrêter sur une erreur.
-- **Corrigé** : un cache des détections abîmé est ignoré, l'analyse est simplement refaite.
-- **Vérification fluide** pendant la lecture, même avec beaucoup de zones et de passages.
-- **Ménage** : les anciens installateurs de mise à jour sont nettoyés, et les outils (FFmpeg…) s'arrêtent avec l'appli.
+- **Reconnaissance plus juste** : bien moins de fausses alertes (torses d'hommes, soutiens-gorge, zones isolées peu sûres). Rien à réanalyser : rouvre ton projet.
+- **Reconnaissance plus complète** : une zone vue faiblement par le détecteur mais confirmée par la 2e vérification est floutée, chaque zone commence dès sa première image, et le flou ne clignote plus quand une zone est perdue un instant.
+- **Liste des zones** : confiance de l'IA affichée, bouton « Tout valider ».
+- **Corrigé** : retirer ou valider une zone ne touche plus sa voisine de la même classe ; « Flouter à nouveau » restaure la bonne zone.
+- **Corrigé** : zones et flou toujours pile sur l'image (fenêtre basse, vidéo verticale, plein écran) ; plus de retour à l'image 0 quand l'aperçu est prêt.
+- **Corrigé** : « Analyser toute la vidéo » n'analysait que les passages ; zone perdue pendant un suivi ; touche X ; passages en double.
 
 Tes projets et tes réglages sont gardés.
 

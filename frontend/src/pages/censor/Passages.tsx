@@ -87,7 +87,14 @@ export const Passages = memo(function Passages({ pid, fps, frames, segments, aiO
   onPut: (next: Segment[]) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
-  const save = (next: Segment[]) => onPut(next).catch(onError);
+  // la liste la plus récente, même entre deux clics rapprochés (les props n'arrivent qu'après le rechargement)
+  const latest = useRef(segments);
+  useEffect(() => { latest.current = segments; }, [segments]);
+  const save = (change: (list: Segment[]) => Segment[]) => {
+    const next = change(latest.current);
+    latest.current = next;
+    return onPut(next).catch(onError);
+  };
   const add = (rows: { start: number; end: number; mode: SegmentMode; label: string }[]) => {
     const made = rows.map((r) => ({
       id: Math.random().toString(36).slice(2, 10),
@@ -97,14 +104,16 @@ export const Passages = memo(function Passages({ pid, fps, frames, segments, aiO
       label: r.label,
       validated: false, // importés : à vérifier, comme les zones de l'IA
     }));
-    return onPut([...segments, ...made].sort((a, b) => a.f0 - b.f0));
+    const next = [...latest.current, ...made].sort((a, b) => a.f0 - b.f0);
+    latest.current = next;
+    return onPut(next);
   };
   const remove = (g: Segment) =>
     confirm({
       title: "Retirer ce passage ?",
       body: `${tc(g.f0 / fps)} → ${tc((g.f1 + 1) / fps)} ne sera plus flouté et sort de la liste.`,
       ok: "Retirer",
-      run: () => save(segments.filter((x) => x.id !== g.id)),
+      run: () => save((list) => list.filter((x) => x.id !== g.id)),
     });
   const todo = segments.filter((g) => !g.validated).length;
   const nowIds = new Set(now.split(" "));
@@ -131,8 +140,8 @@ export const Passages = memo(function Passages({ pid, fps, frames, segments, aiO
                   {tc(s.f0 / fps)} → {tc((s.f1 + 1) / fps)}
                   {!s.validated && <span className="cz-badge">à vérifier</span>}
                 </button>
-                <Segmented size="sm" value={s.mode} onChange={(v) => save(segments.map((x) => (x.id === s.id ? { ...x, mode: v } : x)))} options={MODES} />
-                {!s.validated && <Button size="sm" variant="ghost" iconOnly className="cz-ok" icon={<Check size={14} />} tip="C'est juste : valider ce passage" onClick={() => save(segments.map((x) => (x.id === s.id ? { ...x, validated: true } : x)))} />}
+                <Segmented size="sm" value={s.mode} onChange={(v) => save((list) => list.map((x) => (x.id === s.id ? { ...x, mode: v } : x)))} options={MODES} />
+                {!s.validated && <Button size="sm" variant="ghost" iconOnly className="cz-ok" icon={<Check size={14} />} tip="C'est juste : valider ce passage" onClick={() => save((list) => list.map((x) => (x.id === s.id ? { ...x, validated: true } : x)))} />}
                 <Button size="sm" variant="ghost" iconOnly className="cz-no" icon={<Trash2 size={13} />} tip="Retirer ce passage" onClick={() => remove(s)} />
               </div>
             ))}
@@ -155,9 +164,10 @@ function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, o
   pid: string;
   margin: number;
   setMargin: (v: number) => void;
-  onAdd: (rows: { start: number; end: number; mode: SegmentMode; label: string }[]) => void;
+  onAdd: (rows: { start: number; end: number; mode: SegmentMode; label: string }[]) => void | Promise<unknown>;
   onError: (e: unknown) => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const [text, setText] = useState("");
   const [fromImage, setFromImage] = useState(false);
   const [reading, setReading] = useState<"" | "text" | "image">("");
@@ -182,11 +192,13 @@ function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, o
       setRows([]);
       return;
     }
+    let alive = true; // réponse d'un texte déjà remplacé : ignorée
     const h = setTimeout(() => {
       setReading("text");
       api
         .post<Parsed>(`/api/censor/projects/${pid}/timecodes`, { text, margin, ocr: fromImage })
         .then((r) => {
+          if (!alive) return;
           setParsed(r);
           setRows((old) => {
             const prev = new Map(old.map((o) => [o.key, o]));
@@ -197,10 +209,10 @@ function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, o
             });
           });
         })
-        .catch(onError)
-        .finally(() => setReading(""));
+        .catch((e) => alive && onError(e))
+        .finally(() => alive && setReading(""));
     }, 350);
-    return () => clearTimeout(h);
+    return () => { alive = false; clearTimeout(h); setReading(""); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, margin, open, pid, fromImage]);
 
@@ -250,7 +262,7 @@ function ImportTimecodes({ open, onClose, pid, margin, defaultMode, setMargin, o
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
-          <Button variant="primary" disabled={!chosen.length} onClick={() => onAdd(chosen)}>
+          <Button variant="primary" disabled={!chosen.length} loading={adding} onClick={() => { setAdding(true); Promise.resolve(onAdd(chosen)).finally(() => setAdding(false)); }}>
             {chosen.length ? `Ajouter ${chosen.length} passage${chosen.length > 1 ? "s" : ""}` : "Ajouter"}
           </Button>
         </>

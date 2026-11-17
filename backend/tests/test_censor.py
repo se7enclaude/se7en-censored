@@ -69,7 +69,7 @@ def test_male_chest_is_not_a_breast():
     MB = T.LABELS.index("MALE_BREAST_EXPOSED")
     pecs = moving(0, 30, score=0.6) + moving(0, 30, cls=MB, score=0.55)  # même endroit, presque aussi sûr
     assert T.build(det(pecs), 25.0, 100, T.Params()) == []
-    breast = moving(0, 30, score=0.7) + moving(0, 30, cls=MB, score=0.3)  # le torse masculin est bien moins sûr
+    breast = moving(0, 30, score=0.7) + moving(0, 30, cls=MB, score=0.15)  # le torse masculin est bien moins sûr
     assert len(T.build(det(breast), 25.0, 100, T.Params())) == 1
 
 
@@ -381,7 +381,7 @@ def test_fixed_manual_zone_is_kept_as_drawn(tmp_path):
 
 # ------------------------------------------------------------------ 2e passe : vérification, plans, tuiles
 def test_verify_threshold_follows_sensitivity():
-    assert T.verify_threshold(65) == 0.2 and T.verify_threshold(0) == 0.3 and T.verify_threshold(100) == 0.1
+    assert T.verify_threshold(65) == 0.28 and T.verify_threshold(0) == 0.38 and T.verify_threshold(100) == 0.1
 
 
 def test_zone_judged_not_nude_is_dropped():

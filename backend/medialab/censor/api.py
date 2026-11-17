@@ -75,7 +75,8 @@ class HideBody(BaseModel):
 
 
 class UnhideBody(BaseModel):
-    index: int
+    index: int | None = None
+    track: str | None = None
 
 
 _running = [0]  # tâches « censor » en cours : la mémoire du GPU est rendue quand la dernière finit
@@ -199,12 +200,21 @@ def register(app: FastAPI, S) -> None:
             except Exception:  # noqa: BLE001 - un projet abîmé ne doit pas empêcher le lancement
                 log.exception("Could not recover censor project %s", item.get("id"))
 
-    def cancel_job(project: dict) -> None:
-        if project.get("job"):
-            try:
-                S.jobs.cancel(project["job"])
-            except MediaLabError:
-                pass
+    def cancel_job(project: dict, preview: bool = False) -> None:
+        for key in ("job", "preview_job") if preview else ("job",):  # ``preview`` : la copie d'aperçu aussi
+            if project.get(key):
+                try:
+                    S.jobs.cancel(project[key])
+                except MediaLabError:
+                    pass
+
+    edit = threading.Lock()  # choix de l'utilisateur (zones, passages) : lus, changés et écrits un à la fois
+
+    def edited(fn):
+        def run():
+            with edit:
+                return fn()
+        return run
 
     recover()
 
@@ -270,7 +280,7 @@ def register(app: FastAPI, S) -> None:
     @app.delete("/api/censor/projects/{pid}")
     async def delete(pid: str):
         project = P.load(pid)
-        cancel_job(project)
+        cancel_job(project, preview=True)
         P.delete(pid)
         return {"ok": True}
 
@@ -281,7 +291,8 @@ def register(app: FastAPI, S) -> None:
         if all:
             project = P.load(pid)
             if project.get("scope_only"):
-                P.patch(pid, {"scope_only": False, "options": {**project["options"], "ai_outside": True}})
+                P.patch(pid, {"scope_only": False, "options": {**project["options"], "ai_outside": True},
+                              "scope": {**(project.get("scope") or {}), "applied": True}})
         return {"job": start(pid, "analyze")}
 
     @app.post("/api/censor/projects/{pid}/cancel")
@@ -304,7 +315,7 @@ def register(app: FastAPI, S) -> None:
             if project.get("status") in ("review", "done"):
                 out["stats"] = {**(project.get("stats") or {}), **_cov(project)}
             return P.patch(pid, out)
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     def _cov(project: dict) -> dict:
         tracks, meta = pipeline.zones(project)
@@ -340,7 +351,7 @@ def register(app: FastAPI, S) -> None:
             project = P.load(pid)
             project["manual"] = clean
             return P.patch(pid, {"manual": clean, "stats": {**(project.get("stats") or {}), **_cov(project)}})
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     def _timing(project: dict) -> tuple[float, int]:
         loaded = pipeline.detect.load(P.cache_dir(project["id"]))
@@ -391,7 +402,7 @@ def register(app: FastAPI, S) -> None:
                               "label": str(z.get("label") or "")[:200], "validated": bool(z.get("validated"))})
             project["segments"] = clean
             return P.patch(pid, {"segments": clean, "stats": {**(project.get("stats") or {}), **_cov(project)}})
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     @app.post("/api/censor/projects/{pid}/follow")
     async def follow(pid: str, body: FollowBody):
@@ -409,21 +420,30 @@ def register(app: FastAPI, S) -> None:
             t = next((t for t in tracks if t.id == body.track), None)
             if t is None:
                 raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
-            project["hidden"] = [*(project.get("hidden") or []), {"cls": t.cls, "f0": t.f0, "f1": t.f1}]
+            hidden = project.get("hidden") or []
+            if not T.hidden_match(t, hidden):  # double clic : une seule entrée
+                hidden = [*hidden, T.mark(t)]
+            project["hidden"] = hidden
             return P.patch(pid, {"hidden": project["hidden"],
                                  "stats": {**(project.get("stats") or {}), **_cov(project)}})
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     @app.post("/api/censor/projects/{pid}/unhide")
     async def unhide(pid: str, body: UnhideBody):
         def run():
             project = P.load(pid)
             hidden = project.get("hidden") or []
-            if 0 <= body.index < len(hidden):
+            if body.track:  # « Flouter à nouveau » : tout ce qui retirait cette zone-là, et seulement elle
+                tracks, _ = pipeline.zones(project)
+                t = next((t for t in tracks if t.id == body.track), None)
+                if t is None:
+                    raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
+                hidden = [h for h in hidden if not T.hidden_match(t, [h])]
+            elif body.index is not None and 0 <= body.index < len(hidden):
                 hidden.pop(body.index)
             project["hidden"] = hidden
             return P.patch(pid, {"hidden": hidden, "stats": {**(project.get("stats") or {}), **_cov(project)}})
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     @app.post("/api/censor/projects/{pid}/validate")
     async def validate(pid: str, body: HideBody):
@@ -431,12 +451,17 @@ def register(app: FastAPI, S) -> None:
         def run():
             project = P.load(pid)
             tracks, _ = pipeline.zones(project)
+            if body.track == "*":  # « Tout valider » : tout ce qui reste à vérifier (les zones retirées le restent)
+                done = project.get("validated") or []
+                hidden = project.get("hidden") or []
+                new = [T.mark(t) for t in tracks if not T.hidden_match(t, hidden) and not T.hidden_match(t, done)]
+                return P.patch(pid, {"validated": [*done, *new]})
             t = next((t for t in tracks if t.id == body.track), None)
             if t is None:
                 raise MediaLabError("zone_not_found", "Cette zone n'existe plus.", "Recharge le projet.")
             done = [v for v in project.get("validated") or [] if not T.hidden_match(t, [v])]
-            return P.patch(pid, {"validated": [*done, {"cls": t.cls, "f0": t.f0, "f1": t.f1}]})
-        return await run_in_threadpool(run)
+            return P.patch(pid, {"validated": [*done, T.mark(t)]})
+        return await run_in_threadpool(edited(run))
 
     @app.post("/api/censor/projects/{pid}/unvalidate")
     async def unvalidate(pid: str, body: HideBody):
@@ -446,7 +471,7 @@ def register(app: FastAPI, S) -> None:
             t = next((t for t in tracks if t.id == body.track), None)
             keep = [v for v in project.get("validated") or [] if t is None or not T.hidden_match(t, [v])]
             return P.patch(pid, {"validated": keep})
-        return await run_in_threadpool(run)
+        return await run_in_threadpool(edited(run))
 
     @app.get("/api/censor/projects/{pid}/frame")
     async def frame(pid: str, f: int = 0, blur: bool = True, zoom: bool = False):

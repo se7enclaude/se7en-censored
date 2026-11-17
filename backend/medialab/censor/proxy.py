@@ -84,10 +84,11 @@ class Background:
     """Fabrication de la copie en parallèle de l'analyse (elle décode la vidéo de son côté)."""
 
     def __init__(self, src: Path, video: dict, dst: Path, cancel: threading.Event) -> None:
+        self._cancel, self._stop = cancel, threading.Event()
         self.frac = 0.0
         self.result: dict | None = None
         self.error: BaseException | None = None
-        self._th = threading.Thread(target=self._run, args=(src, video, dst, cancel), name="censor-preview",
+        self._th = threading.Thread(target=self._run, args=(src, video, dst, self), name="censor-preview",
                                     daemon=True)
         self._th.start()
 
@@ -96,6 +97,14 @@ class Background:
             self.result = build(src, video, dst, cancel, lambda f: setattr(self, "frac", f))
         except BaseException as e:  # noqa: BLE001 - lu par l'analyse à la fin
             self.error = e
+
+    def is_set(self) -> bool:  # vu par FFmpeg comme un signal d'arrêt : la tâche annulée, ou ``stop``
+        return self._cancel.is_set() or self._stop.is_set()
+
+    def stop(self) -> None:
+        """L'analyse s'arrête (erreur, annulation) : la copie aussi, FFmpeg ne reste pas à tourner seul."""
+        self._stop.set()
+        self._th.join(timeout=10)
 
     def wait(self, tick: Callable[[float], None], cancel: threading.Event) -> None:
         while self._th.is_alive():

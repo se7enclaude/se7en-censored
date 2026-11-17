@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, Undo2, X } from "lucide-react";
+import { Check, CheckCheck, Undo2, X } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Segmented } from "../../components/ui";
 import { tc } from "./Passages";
@@ -11,6 +11,7 @@ export interface ZoneItem {
   f1: number;
   hidden?: boolean;
   validated?: boolean;
+  score?: number;
 }
 type Filter = "todo" | "ok" | "off";
 
@@ -18,7 +19,7 @@ type Filter = "todo" | "ok" | "off";
  *  confirmation, elles quittent la liste ; « Retirées » permet de revenir en arrière). */
 /** ``now`` : identifiants des zones présentes à l'image en cours (séparés par des espaces). Ne change qu'au début ou à la
  *  fin d'une zone, pas à chaque image : la liste ne se redessine pas pendant la lecture. */
-export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, colors, onSeek, onValidate, onUnvalidate, onRemove, onRestore }: {
+export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, colors, onSeek, onValidate, onValidateAll, onUnvalidate, onRemove, onRestore }: {
   tracks: ZoneItem[];
   fps: number;
   now: string;
@@ -29,6 +30,7 @@ export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, col
   onUnvalidate: (t: ZoneItem) => void;
   onRemove: (t: ZoneItem) => void;
   onRestore: (t: ZoneItem) => void;
+  onValidateAll?: (n: number) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("todo");
   const groups = useMemo(() => ({
@@ -60,6 +62,11 @@ export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, col
           { value: "off", label: `Retirées · ${groups.off.length}` },
         ]}
       />
+      {filter === "todo" && groups.todo.length > 1 && onValidateAll && (
+        <Button size="sm" variant="outline" icon={<CheckCheck size={14} />} tip="Quand tu as tout regardé : ce qui reste est juste" onClick={() => onValidateAll(groups.todo.length)}>
+          Tout valider ({groups.todo.length})
+        </Button>
+      )}
       <div className="cz-zone-list" ref={listRef}>
         {shown.length === 0 && (
           <p className="faint cz-empty">
@@ -74,6 +81,7 @@ export const ZonesList = memo(function ZonesList({ tracks, fps, now, labels, col
               <span className="cz-dot" style={{ background: colors[t.cls] }} />
               <span className="mono">{tc(Math.floor(t.f0 / fps))}</span>
               <span className="ellipsis">{labels[t.cls] ?? t.cls}</span>
+              {t.score != null && <span className={clsx("cz-conf", t.score >= 0.6 ? "hi" : t.score < 0.4 && "lo")} data-tip="Confiance de l'IA (détecteur + 2e vérification)">{Math.round(t.score * 100)} %</span>}
               <span className="faint mono">{((t.f1 - t.f0 + 1) / fps).toFixed(1).replace(".", ",")} s</span>
             </button>
             {filter === "todo" && (
